@@ -72,11 +72,14 @@ create policy "profiles_update_own"
 -- `on delete cascade` foreign key when the auth.users row is deleted.
 
 -- 4. Auto-create a profile row whenever a new auth user is created -------------------
+-- search_path is intentionally empty: this is a SECURITY DEFINER function in
+-- a shared database, so every identifier below is fully-qualified to avoid
+-- any risk of resolving to an object from another schema/app.
 create or replace function carcanhol.handle_new_user()
 returns trigger
 language plpgsql
 security definer
-set search_path = carcanhol, public
+set search_path = ''
 as $$
 begin
   insert into carcanhol.profiles (id, email)
@@ -86,8 +89,12 @@ begin
 end;
 $$;
 
-drop trigger if exists on_auth_user_created on auth.users;
-create trigger on_auth_user_created
+-- Trigger name is namespaced with the "carcanhol_" prefix (even though it
+-- lives on auth.users, outside our schema) so that dropping/recreating it
+-- can never affect a trigger belonging to another app in this shared
+-- Supabase project.
+drop trigger if exists carcanhol_on_auth_user_created on auth.users;
+create trigger carcanhol_on_auth_user_created
   after insert on auth.users
   for each row
   execute function carcanhol.handle_new_user();

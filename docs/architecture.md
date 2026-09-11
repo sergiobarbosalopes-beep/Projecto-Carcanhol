@@ -207,7 +207,7 @@ documento original:
 - **`@supabase/ssr`** é usado para os clientes browser/server, seguindo o
   padrão oficial recomendado pela Supabase para Next.js App Router
   (cookies de sessão geridos automaticamente, incluindo no middleware).
-- **Trigger `on_auth_user_created`** em `auth.users` cria automaticamente a
+- **Trigger `carcanhol_on_auth_user_created`** em `auth.users` cria automaticamente a
   linha correspondente em `carcanhol.profiles`, para que o perfil exista
   desde o primeiro login sem lógica adicional no frontend.
 - **Rota `/` faz apenas redirect** para `/dashboard` (autenticado) ou

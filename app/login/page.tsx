@@ -3,6 +3,7 @@
 import { Suspense, useState, type FormEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/src/database/client";
+import { sanitizeRedirectPath } from "@/src/utils/redirect";
 
 /**
  * Login page (email/password only).
@@ -22,7 +23,9 @@ export default function LoginPage() {
 function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const redirectedFrom = searchParams.get("redirectedFrom") ?? "/dashboard";
+  const redirectedFrom = sanitizeRedirectPath(
+    searchParams.get("redirectedFrom")
+  );
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
