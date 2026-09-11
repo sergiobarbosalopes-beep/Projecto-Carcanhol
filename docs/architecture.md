@@ -59,6 +59,14 @@ Vercel (custo/operação mínimos), mas mantêm separação lógica estrita: nen
 chave de API ou service-role key do Supabase é acessível no lado do cliente. Toda a
 comunicação sensível passa por Route Handlers server-side.
 
+**Decisão BFF para autenticação:** o browser nunca instancia um cliente Supabase.
+Login e logout são pedidos `POST` aos Route Handlers `/api/auth/login` e
+`/api/auth/logout`; estes usam `NEXT_SUPABASE_ANON_KEY` exclusivamente no servidor,
+mantêm RLS e escrevem a sessão em cookies `HttpOnly` através de `@supabase/ssr`.
+Os handlers devolvem apenas sucesso/erro genérico, nunca tokens. O URL do projeto
+permanece em `NEXT_PUBLIC_SUPABASE_URL`, por ser publicável, mas não é necessário
+ao código cliente.
+
 ---
 
 ## 3. Padrão de orquestração do LLM: Function/Tool Calling
@@ -181,6 +189,9 @@ utilizadores autenticados não podem inserir ou alterar a própria membership.
 - `.env.example` documentado, `.env` no `.gitignore`.
 - Validação de inputs (Zod).
 - RLS no Supabase por `user_id`.
+- Autenticação em padrão BFF: o browser fala apenas com Route Handlers; a anon
+  key `NEXT_SUPABASE_ANON_KEY`, tokens e restantes credenciais Supabase ficam
+  fora do bundle cliente.
 - Autorização em duas camadas nas áreas protegidas: Proxy para rejeição
   antecipada e guard server-side junto dos Server Components/Route Handlers,
   ambos exigindo sessão válida + membership em `carcanhol.profiles`.

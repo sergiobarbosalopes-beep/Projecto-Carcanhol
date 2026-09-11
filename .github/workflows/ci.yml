@@ -35,6 +35,6 @@ jobs:
           # pages that read env vars at build time. Real secrets are only
           # needed at runtime (Vercel env vars), not for CI build checks.
           NEXT_PUBLIC_SUPABASE_URL: "https://placeholder.supabase.co"
-          NEXT_PUBLIC_SUPABASE_ANON_KEY: "placeholder-anon-key"
+          NEXT_SUPABASE_ANON_KEY: "placeholder-anon-key"
           SUPABASE_SERVICE_ROLE_KEY: "placeholder-service-role-key"
           SUPABASE_SCHEMA: "carcanhol"
