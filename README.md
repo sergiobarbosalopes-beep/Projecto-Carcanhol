@@ -27,12 +27,13 @@ triggers globais em `auth.users` e não concedem membership automaticamente.
   ecrãs de telemóvel/tablet;
 - navegação para Início, Pesquisa, Chat, Análises e Administração;
 - administração numa página com tabs responsivas:
-  - **Conta:** email atual e alteração de palavra-passe via Supabase Auth;
-  - **Premissas globais:** uma versão atual de texto livre, até 20 000
-    caracteres;
+  - **LLM:** área inicial reservada à configuração futura dos modelos;
   - **Skills:** pesquisa paginada, criação manual, consulta, edição,
     duplicação, ativação, desativação, arquivo, restauro e eliminação
     definitiva reforçada;
+  - **Premissas:** uma versão atual de texto livre das premissas globais, até
+    20 000 caracteres;
+  - **Conta:** email atual e alteração de palavra-passe via Supabase Auth;
 - repositório server-only para a futura integração LLM, limitado a Skills
   `active`.
 

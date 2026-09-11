@@ -11,9 +11,10 @@ import {
 import type { Skill, SkillStatus } from "@/src/types/supabase";
 
 const TABS = [
-  { id: "conta", label: "Conta" },
-  { id: "premissas", label: "Premissas globais" },
+  { id: "llm", label: "LLM" },
   { id: "skills", label: "Skills" },
+  { id: "premissas", label: "Premissas" },
+  { id: "conta", label: "Conta" },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
@@ -34,7 +35,7 @@ export function AdminPanel({
   initialAssumptions: string;
   initialSkills: SkillList;
 }) {
-  const [activeTab, setActiveTab] = useState<TabId>("conta");
+  const [activeTab, setActiveTab] = useState<TabId>("llm");
 
   function handleTabKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
@@ -89,12 +90,20 @@ export function AdminPanel({
 
       <div className="p-4 sm:p-6 lg:p-8">
         <div
-          id="admin-panel-conta"
+          id="admin-panel-llm"
           role="tabpanel"
-          aria-labelledby="admin-tab-conta"
-          hidden={activeTab !== "conta"}
+          aria-labelledby="admin-tab-llm"
+          hidden={activeTab !== "llm"}
         >
-          <AccountPanel email={email} />
+          <LlmPanel />
+        </div>
+        <div
+          id="admin-panel-skills"
+          role="tabpanel"
+          aria-labelledby="admin-tab-skills"
+          hidden={activeTab !== "skills"}
+        >
+          <SkillsPanel initialSkills={initialSkills} />
         </div>
         <div
           id="admin-panel-premissas"
@@ -105,15 +114,43 @@ export function AdminPanel({
           <AssumptionsPanel initialContent={initialAssumptions} />
         </div>
         <div
-          id="admin-panel-skills"
+          id="admin-panel-conta"
           role="tabpanel"
-          aria-labelledby="admin-tab-skills"
-          hidden={activeTab !== "skills"}
+          aria-labelledby="admin-tab-conta"
+          hidden={activeTab !== "conta"}
         >
-          <SkillsPanel initialSkills={initialSkills} />
+          <AccountPanel email={email} />
         </div>
       </div>
     </section>
+  );
+}
+
+function LlmPanel() {
+  return (
+    <div className="max-w-4xl">
+      <SectionTitle
+        title="Modelos LLM"
+        description="Área reservada aos modelos de linguagem que irão suportar as funcionalidades inteligentes da aplicação."
+      />
+      <div className="mt-6 flex min-h-64 items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50 px-6 py-12 text-center">
+        <div className="max-w-md">
+          <div
+            className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-teal-100 text-sm font-bold text-teal-800"
+            aria-hidden="true"
+          >
+            LLM
+          </div>
+          <h3 className="mt-4 text-lg font-bold text-slate-900">
+            Configuração disponível numa fase posterior
+          </h3>
+          <p className="mt-2 text-sm leading-6 text-slate-600">
+            A seleção e a configuração dos modelos LLM serão desenvolvidas numa
+            fase posterior do projeto.
+          </p>
+        </div>
+      </div>
+    </div>
   );
 }
 
