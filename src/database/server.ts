@@ -19,6 +19,10 @@ import type { Database } from "@/src/types/supabase";
 import { authCookieOptions } from "@/src/database/cookie-options";
 import { getAuthEnv, getPublicEnv, getServerEnv } from "@/src/utils/env";
 
+export type CarcanholClient = ReturnType<
+  typeof createSupabaseClient<Database, "carcanhol">
+>;
+
 export async function createClient() {
   const cookieStore = await cookies();
   const { NEXT_PUBLIC_SUPABASE_URL } = getPublicEnv();

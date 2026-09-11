@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { hasCarcanholMembership } from "@/src/auth/membership";
 import { createClient } from "@/src/database/server";
+import { rejectCrossOrigin } from "@/src/http/api";
 
 const GENERIC_LOGIN_ERROR =
   "Não foi possível iniciar sessão. Verifique os dados ou contacte o administrador.";
@@ -26,6 +27,12 @@ function loginError(status: number) {
 }
 
 export async function POST(request: Request) {
+  const originError = rejectCrossOrigin(request);
+
+  if (originError) {
+    return originError;
+  }
+
   let body: unknown;
 
   try {
