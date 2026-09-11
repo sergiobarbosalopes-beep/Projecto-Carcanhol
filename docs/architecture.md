@@ -166,6 +166,12 @@ analyses
 NOTA IMPORTANTE PARA ESTA IMPLEMENTAÇÃO: todas estas tabelas devem viver no schema "carcanhol", não no schema public, porque o projeto Supabase é partilhado com outras aplicações do utilizador. Nesta Fase 1 só precisas de criar o schema e a tabela de perfil (profiles) — as restantes tabelas (instruments, prices, etc.) ficam para fases posteriores.
 
 RLS ativo desde o início (mesmo com 1 utilizador), preparando multiutilizador futuro.
+No projeto Supabase partilhado, `carcanhol.profiles` não é um perfil criado
+automaticamente para cada `auth.users`: é a **allowlist explícita de
+membership do Carcanhol**. Uma conta autenticada só entra na aplicação quando
+o seu UUID também tem uma row própria nesta tabela. A leitura usa anon key +
+sessão e uma policy RLS `auth.uid() = id`; `anon` não recebe `SELECT`, e os
+utilizadores autenticados não podem inserir ou alterar a própria membership.
 
 ---
 
@@ -175,6 +181,9 @@ RLS ativo desde o início (mesmo com 1 utilizador), preparando multiutilizador f
 - `.env.example` documentado, `.env` no `.gitignore`.
 - Validação de inputs (Zod).
 - RLS no Supabase por `user_id`.
+- Autorização em duas camadas nas áreas protegidas: Proxy para rejeição
+  antecipada e guard server-side junto dos Server Components/Route Handlers,
+  ambos exigindo sessão válida + membership em `carcanhol.profiles`.
 - Nunca enviar credenciais financeiras ao LLM.
 - LLM nunca executa transações — apenas analisa/sugere.
 
@@ -364,8 +373,14 @@ documento original:
 - **`@supabase/ssr`** é usado para os clientes browser/server, seguindo o
   padrão oficial recomendado pela Supabase para Next.js App Router
   (cookies de sessão geridos automaticamente, incluindo no middleware).
-- **Trigger `carcanhol_on_auth_user_created`** em `auth.users` cria automaticamente a
-  linha correspondente em `carcanhol.profiles`, para que o perfil exista
-  desde o primeiro login sem lógica adicional no frontend.
+- **Membership explícita no schema `carcanhol`.** Depois de aplicar a
+  migration, o proprietário cria a conta em Authentication e insere
+  manualmente o UUID em `carcanhol.profiles`. Não existe trigger sobre
+  `auth.users`, porque criaria acesso Carcanhol para utilizadores das outras
+  aplicações do mesmo projeto Supabase.
+- **Guard server-side centralizado.** `src/auth/server.ts` fornece
+  `requireAuthorizedUser()` para Server Components e futuras Route Handlers,
+  e `getAuthorizedUser()` para handlers que tenham de devolver JSON 401/403.
+  Ambos validam autenticação e membership via sessão + RLS, sem service role.
 - **Rota `/` faz apenas redirect** para `/dashboard` (autenticado) ou
   `/login` (não autenticado) — não existe landing page pública nesta fase.
