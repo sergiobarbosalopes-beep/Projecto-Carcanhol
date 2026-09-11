@@ -28,9 +28,9 @@ ainda — ver secção 8 de `docs/architecture.md` para o roadmap de fases.
 app/
   login/            Página de login (email/password)
   dashboard/         Página protegida (placeholder)
-  api/auth/logout/   Route Handler de logout
+  api/auth/           Route Handlers BFF de login/logout
 src/
-  database/          Clientes Supabase (browser + server), scoped a "carcanhol"
+  database/          Clientes Supabase server-only, scoped a "carcanhol"
   middleware/         Lógica de proteção de rotas / refresh de sessão
   types/              Tipos partilhados (incl. tipos do schema "carcanhol")
   utils/              Utilitários (validação de env vars, etc.)
@@ -64,7 +64,7 @@ tests/                Reservado para testes automatizados futuros
 3. Preencher `.env` com as credenciais reais do teu projeto Supabase
    (Dashboard → Project Settings → API):
    - `NEXT_PUBLIC_SUPABASE_URL`
-   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+   - `NEXT_SUPABASE_ANON_KEY` (server-only — nunca expor ao browser)
    - `SUPABASE_SERVICE_ROLE_KEY` (secreta — nunca commitar, nunca expor ao browser)
    - `SUPABASE_SCHEMA=carcanhol`
 
@@ -131,7 +131,7 @@ direta do Vercel com o GitHub (ver secção seguinte).
 1. Importar este repositório no Vercel (New Project → Import Git Repository).
 2. Configurar as mesmas variáveis de ambiente do `.env` em
    Project Settings → Environment Variables (`NEXT_PUBLIC_SUPABASE_URL`,
-   `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`,
+   `NEXT_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`,
    `SUPABASE_SCHEMA`).
 3. Deploy — o Vercel deteta automaticamente o Next.js, `npm run build`
    corre sem passos adicionais.
@@ -141,9 +141,13 @@ direta do Vercel com o GitHub (ver secção seguinte).
 Esta fase implementa **apenas login** (email/password), sem registo
 público. Uma sessão Supabase válida não basta: o UUID também tem de existir
 em `carcanhol.profiles`, que funciona como allowlist explícita da aplicação.
-O Proxy e os Server Components protegidos validam sessão + membership usando
-a anon key, a sessão do utilizador e RLS; a service role nunca é usada no
-browser.
+O browser comunica apenas com os Route Handlers BFF de login/logout. A anon
+key fica em `NEXT_SUPABASE_ANON_KEY`, é lida exclusivamente no servidor e não
+entra no bundle do browser; apenas `NEXT_PUBLIC_SUPABASE_URL` continua pública.
+As sessões são transportadas por cookies `HttpOnly` geridos por
+`@supabase/ssr`. O Proxy e os Server Components protegidos validam sessão +
+membership usando a anon key, a sessão do utilizador e RLS; a service role
+nunca é usada no fluxo de autenticação.
 
 Num projeto Supabase partilhado, **não desativar globalmente o signup** se
 essa definição afetar as outras aplicações. O Carcanhol não expõe qualquer

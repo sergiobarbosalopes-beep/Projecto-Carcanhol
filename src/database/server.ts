@@ -10,24 +10,28 @@
  *
  * Scoped to the "carcanhol" Postgres schema.
  */
+import "server-only";
+
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/src/types/supabase";
-import { getPublicEnv, getServerEnv } from "@/src/utils/env";
+import { authCookieOptions } from "@/src/database/cookie-options";
+import { getAuthEnv, getPublicEnv, getServerEnv } from "@/src/utils/env";
 
 export async function createClient() {
   const cookieStore = await cookies();
-  const { NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY } =
-    getPublicEnv();
+  const { NEXT_PUBLIC_SUPABASE_URL } = getPublicEnv();
+  const { NEXT_SUPABASE_ANON_KEY } = getAuthEnv();
 
   return createServerClient<Database, "carcanhol">(
     NEXT_PUBLIC_SUPABASE_URL,
-    NEXT_PUBLIC_SUPABASE_ANON_KEY,
+    NEXT_SUPABASE_ANON_KEY,
     {
       db: {
         schema: "carcanhol",
       },
+      cookieOptions: authCookieOptions,
       cookies: {
         getAll() {
           return cookieStore.getAll();

@@ -8,7 +8,8 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import type { Database } from "@/src/types/supabase";
-import { getPublicEnv } from "@/src/utils/env";
+import { authCookieOptions } from "@/src/database/cookie-options";
+import { getAuthEnv, getPublicEnv } from "@/src/utils/env";
 import { hasCarcanholMembership } from "@/src/auth/membership";
 
 /** Route prefixes that require an authenticated user. */
@@ -48,16 +49,17 @@ function redirectToLogin(
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });
 
-  const { NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY } =
-    getPublicEnv();
+  const { NEXT_PUBLIC_SUPABASE_URL } = getPublicEnv();
+  const { NEXT_SUPABASE_ANON_KEY } = getAuthEnv();
 
   const supabase = createServerClient<Database, "carcanhol">(
     NEXT_PUBLIC_SUPABASE_URL,
-    NEXT_PUBLIC_SUPABASE_ANON_KEY,
+    NEXT_SUPABASE_ANON_KEY,
     {
       db: {
         schema: "carcanhol",
       },
+      cookieOptions: authCookieOptions,
       cookies: {
         getAll() {
           return request.cookies.getAll();

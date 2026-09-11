@@ -1,14 +1,36 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/src/database/server";
 
-/**
- * Server-side logout endpoint. Provided as a backend alternative to the
- * client-side `supabase.auth.signOut()` call used by the dashboard's
- * logout button (e.g. for non-JS form submissions or future server actions).
- */
 export async function POST() {
-  const supabase = await createClient();
-  await supabase.auth.signOut();
+  try {
+    const supabase = await createClient();
+    const { error } = await supabase.auth.signOut();
 
-  return NextResponse.json({ success: true });
+    if (error) {
+      return logoutError();
+    }
+
+    return NextResponse.json(
+      { success: true },
+      {
+        headers: {
+          "Cache-Control": "no-store",
+        },
+      }
+    );
+  } catch {
+    return logoutError();
+  }
+}
+
+function logoutError() {
+  return NextResponse.json(
+    { error: "Não foi possível terminar a sessão. Tente novamente." },
+    {
+      status: 500,
+      headers: {
+        "Cache-Control": "no-store",
+      },
+    }
+  );
 }

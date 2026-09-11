@@ -4,14 +4,19 @@
  * Import from here instead of reading `process.env` directly so that
  * missing/misconfigured variables fail fast with a clear error message.
  */
+import "server-only";
+
 import { z } from "zod";
 
 const publicEnvSchema = z.object({
   NEXT_PUBLIC_SUPABASE_URL: z.string().url({
     message: "NEXT_PUBLIC_SUPABASE_URL must be a valid URL",
   }),
-  NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().min(1, {
-    message: "NEXT_PUBLIC_SUPABASE_ANON_KEY is required",
+});
+
+const authEnvSchema = z.object({
+  NEXT_SUPABASE_ANON_KEY: z.string().min(1, {
+    message: "NEXT_SUPABASE_ANON_KEY is required",
   }),
 });
 
@@ -26,12 +31,26 @@ const serverEnvSchema = z.object({
 export function getPublicEnv() {
   const parsed = publicEnvSchema.safeParse({
     NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
-    NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
   });
 
   if (!parsed.success) {
     throw new Error(
       `Invalid public environment variables: ${parsed.error.message}`
+    );
+  }
+
+  return parsed.data;
+}
+
+/** Supabase anon credential used exclusively by server-side auth clients. */
+export function getAuthEnv() {
+  const parsed = authEnvSchema.safeParse({
+    NEXT_SUPABASE_ANON_KEY: process.env.NEXT_SUPABASE_ANON_KEY,
+  });
+
+  if (!parsed.success) {
+    throw new Error(
+      `Invalid authentication environment variables: ${parsed.error.message}`
     );
   }
 

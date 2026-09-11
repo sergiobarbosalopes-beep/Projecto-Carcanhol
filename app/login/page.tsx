@@ -2,8 +2,6 @@
 
 import { Suspense, useState, type FormEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { createClient } from "@/src/database/client";
-import { hasCarcanholMembership } from "@/src/auth/membership";
 import { sanitizeRedirectPath } from "@/src/utils/redirect";
 import { BrandLogo } from "@/src/components/brand-logo";
 
@@ -45,36 +43,28 @@ function LoginForm() {
     setErrorMessage(null);
     setIsSubmitting(true);
 
-    const supabase = createClient();
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-
-    if (error || !data.user) {
-      setIsSubmitting(false);
-      setErrorMessage(GENERIC_LOGIN_ERROR);
-      return;
-    }
-
-    let hasMembership = false;
-
     try {
-      hasMembership = await hasCarcanholMembership(supabase, data.user.id);
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ email, password }),
+        cache: "no-store",
+      });
+
+      if (!response.ok) {
+        setErrorMessage(GENERIC_LOGIN_ERROR);
+        return;
+      }
+
+      router.replace(redirectedFrom);
+      router.refresh();
     } catch {
-      // The UI intentionally uses the same response as invalid credentials,
-      // while the authorization helper fails closed on lookup errors.
-    }
-
-    if (!hasMembership) {
-      await supabase.auth.signOut({ scope: "local" });
-      setIsSubmitting(false);
       setErrorMessage(GENERIC_LOGIN_ERROR);
-      return;
+    } finally {
+      setIsSubmitting(false);
     }
-
-    router.replace(redirectedFrom);
-    router.refresh();
   }
 
   return (
