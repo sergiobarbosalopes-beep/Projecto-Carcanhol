@@ -7,6 +7,7 @@
 import "server-only";
 
 import { z } from "zod";
+import { parseBase64EncryptionKey } from "@/src/security/llm-credential-crypto";
 
 const publicEnvSchema = z.object({
   NEXT_PUBLIC_SUPABASE_URL: z.string().url({
@@ -20,11 +21,32 @@ const authEnvSchema = z.object({
   }),
 });
 
+const encryptionKeySchema = z.string().transform((value, context) => {
+  try {
+    return parseBase64EncryptionKey(value);
+  } catch {
+    context.addIssue({
+      code: "custom",
+      message:
+        "LLM_CREDENTIAL_ENCRYPTION_KEY must be canonical base64 for exactly 32 bytes",
+    });
+    return z.NEVER;
+  }
+});
+
 const serverEnvSchema = z.object({
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1, {
     message: "SUPABASE_SERVICE_ROLE_KEY is required",
   }),
-  SUPABASE_SCHEMA: z.string().min(1).default("carcanhol"),
+  SUPABASE_SCHEMA: z.literal("carcanhol").default("carcanhol"),
+  LLM_CREDENTIAL_ENCRYPTION_KEY: encryptionKeySchema,
+  LLM_CREDENTIAL_ENCRYPTION_KEY_VERSION: z
+    .string()
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/, {
+      message:
+        "LLM_CREDENTIAL_ENCRYPTION_KEY_VERSION must be a safe 1-32 character identifier",
+    })
+    .default("1"),
 });
 
 /** Environment variables that are safe to expose to the browser. */
@@ -66,6 +88,9 @@ export function getServerEnv() {
   const parsed = serverEnvSchema.safeParse({
     SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
     SUPABASE_SCHEMA: process.env.SUPABASE_SCHEMA,
+    LLM_CREDENTIAL_ENCRYPTION_KEY: process.env.LLM_CREDENTIAL_ENCRYPTION_KEY,
+    LLM_CREDENTIAL_ENCRYPTION_KEY_VERSION:
+      process.env.LLM_CREDENTIAL_ENCRYPTION_KEY_VERSION,
   });
 
   if (!parsed.success) {

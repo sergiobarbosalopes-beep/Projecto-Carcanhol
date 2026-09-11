@@ -22,6 +22,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Test
+        run: npm test
+
       - name: Lint
         run: npm run lint
 
@@ -38,3 +41,5 @@ jobs:
           NEXT_SUPABASE_ANON_KEY: "placeholder-anon-key"
           SUPABASE_SERVICE_ROLE_KEY: "placeholder-service-role-key"
           SUPABASE_SCHEMA: "carcanhol"
+          LLM_CREDENTIAL_ENCRYPTION_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+          LLM_CREDENTIAL_ENCRYPTION_KEY_VERSION: "ci-placeholder"
