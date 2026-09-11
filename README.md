@@ -105,8 +105,8 @@ docs/architecture.md
 
    A segunda migration cria `carcanhol.global_assumptions`,
    `carcanhol.skills`, índices, triggers locais de `updated_at`, a proteção
-   contra eliminação de Skills ativas, grants mínimos e policies RLS por
-   `auth.uid()`.
+   contra eliminação de Skills ativas, grants mínimos e policies RLS que
+   exigem simultaneamente ownership e membership em `carcanhol.profiles`.
 
 4. Em **Project Settings → API → Exposed schemas**, adicionar `carcanhol`.
 
@@ -146,6 +146,8 @@ docs/architecture.md
   rejeição antecipada.
 - Cada handler protegido valida autenticação + membership e devolve respostas
   `Cache-Control: no-store`.
+- As policies das tabelas de utilizador repetem a membership; uma conta
+  autenticada de outra app não obtém acesso direto pela Data API.
 - A password atual é verificada antes de uma alteração; passwords nunca são
   persistidas, registadas ou devolvidas.
 - Markdown é apresentado como texto em `<pre>`; não é usado

@@ -2,6 +2,7 @@ import "server-only";
 
 import type { CarcanholClient } from "@/src/database/server";
 import { createClient } from "@/src/database/server";
+import { AuthorizationError, requireAuthorizedUser } from "@/src/auth/server";
 import type { Skill, SkillStatus } from "@/src/types/supabase";
 import { SKILLS_PAGE_SIZE } from "@/src/admin/validation";
 
@@ -263,10 +264,10 @@ export async function permanentlyDeleteSkill(
 }
 
 export async function listActiveSkills(
-  userId: string,
-  supabase?: CarcanholClient
+  userId: string
 ): Promise<Pick<Skill, "id" | "name" | "description" | "updated_at">[]> {
-  const client = supabase ?? (await createClient());
+  const client = await createClient();
+  await requireMatchingAuthorizedUser(client, userId);
   const { data, error } = await client
     .from("skills")
     .select("id, name, description, updated_at")
@@ -286,10 +287,10 @@ export async function listActiveSkills(
 
 export async function getActiveSkill(
   userId: string,
-  id: string,
-  supabase?: CarcanholClient
+  id: string
 ): Promise<Skill | null> {
-  const client = supabase ?? (await createClient());
+  const client = await createClient();
+  await requireMatchingAuthorizedUser(client, userId);
   const { data, error } = await client
     .from("skills")
     .select("*")
@@ -305,6 +306,20 @@ export async function getActiveSkill(
   }
 
   return data;
+}
+
+async function requireMatchingAuthorizedUser(
+  supabase: CarcanholClient,
+  userId: string
+) {
+  const user = await requireAuthorizedUser({
+    supabase,
+    onUnauthorized: "throw",
+  });
+
+  if (user.id !== userId) {
+    throw new AuthorizationError();
+  }
 }
 
 export class SkillLifecycleError extends Error {}

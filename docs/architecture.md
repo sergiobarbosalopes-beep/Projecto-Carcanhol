@@ -101,6 +101,8 @@ Nenhuma migration cria objetos de aplicação em `public`.
 | `created_at` | timestamptz | Data de membership           |
 
 Authenticated tem apenas `SELECT` da própria row. Escrita é administrativa.
+As policies das restantes tabelas consultam esta allowlist; a policy de
+`profiles` não consulta outras tabelas e, por isso, não existe recursão RLS.
 
 ### `carcanhol.global_assumptions`
 
@@ -111,8 +113,9 @@ Authenticated tem apenas `SELECT` da própria row. Escrita é administrativa.
 | `created_at` | timestamptz | automático                    |
 | `updated_at` | timestamptz | trigger local automático      |
 
-Não há tabela de histórico. Authenticated recebe apenas
-`SELECT`, `INSERT`, `UPDATE` das próprias rows.
+Não há tabela de histórico. Authenticated recebe apenas `SELECT`, `INSERT`,
+`UPDATE` das próprias rows e apenas enquanto existir membership explícita em
+`carcanhol.profiles`.
 
 ### `carcanhol.skills`
 
@@ -128,8 +131,10 @@ Não há tabela de histórico. Authenticated recebe apenas
 | `updated_at`       | timestamptz | trigger local automático              |
 
 Existem índices por proprietário/data e proprietário/estado/data. Authenticated
-recebe CRUD apenas das próprias rows. `anon` não tem usage do schema nem
-privilégios nas tabelas.
+recebe CRUD apenas das próprias rows e apenas com membership em
+`carcanhol.profiles`. `anon` não tem usage do schema nem privilégios nas
+tabelas. Assim, uma conta autenticada pertencente a outra aplicação do projeto
+Supabase partilhado não consegue criar sequer a sua primeira row pela Data API.
 
 As funções de trigger pertencem a `carcanhol`, usam `security invoker` e
 `search_path = ''`. A execução direta é revogada a `public`, `anon` e
@@ -165,9 +170,12 @@ em `inactive`; a ativação posterior é explícita.
 - `listActiveSkills(userId)`, com limite de 100 resumos;
 - `getActiveSkill(userId, id)`, que exige `status = active`.
 
-Estes métodos são server-only, aplicam simultaneamente `user_id` e
-`status = active` e continuam sujeitos a RLS. Serão a base das futuras tools
-`list_skills` e `load_skill`; a Fase 2 não as expõe nem integra um LLM.
+Estes métodos são server-only, criam sempre um cliente anon + sessão, repetem
+`requireAuthorizedUser()`, rejeitam um `userId` diferente do utilizador da
+sessão e aplicam simultaneamente `user_id` e `status = active`. A RLS volta a
+exigir ownership + membership, pelo que falham fechados e não aceitam a injeção
+de um cliente service role. Serão a base das futuras tools `list_skills` e
+`load_skill`; a Fase 2 não as expõe nem integra um LLM.
 
 As premissas globais serão futuramente injetadas como contexto superior à
 mensagem do utilizador. Nesta fase são apenas persistidas, nunca enviadas a um

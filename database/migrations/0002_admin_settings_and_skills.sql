@@ -106,52 +106,118 @@ grant all on carcanhol.skills to service_role;
 alter table carcanhol.global_assumptions enable row level security;
 alter table carcanhol.skills enable row level security;
 
+-- Every app-data policy requires both row ownership and explicit membership.
+-- The profiles lookup is safe under RLS: its own policy checks only
+-- auth.uid() = id and does not query either table below, so it cannot recurse.
 drop policy if exists "global_assumptions_select_own"
   on carcanhol.global_assumptions;
 create policy "global_assumptions_select_own"
   on carcanhol.global_assumptions
   for select to authenticated
-  using ((select auth.uid()) = user_id);
+  using (
+    (select auth.uid()) = user_id
+    and exists (
+      select 1
+      from carcanhol.profiles as p
+      where p.id = (select auth.uid())
+    )
+  );
 
 drop policy if exists "global_assumptions_insert_own"
   on carcanhol.global_assumptions;
 create policy "global_assumptions_insert_own"
   on carcanhol.global_assumptions
   for insert to authenticated
-  with check ((select auth.uid()) = user_id);
+  with check (
+    (select auth.uid()) = user_id
+    and exists (
+      select 1
+      from carcanhol.profiles as p
+      where p.id = (select auth.uid())
+    )
+  );
 
 drop policy if exists "global_assumptions_update_own"
   on carcanhol.global_assumptions;
 create policy "global_assumptions_update_own"
   on carcanhol.global_assumptions
   for update to authenticated
-  using ((select auth.uid()) = user_id)
-  with check ((select auth.uid()) = user_id);
+  using (
+    (select auth.uid()) = user_id
+    and exists (
+      select 1
+      from carcanhol.profiles as p
+      where p.id = (select auth.uid())
+    )
+  )
+  with check (
+    (select auth.uid()) = user_id
+    and exists (
+      select 1
+      from carcanhol.profiles as p
+      where p.id = (select auth.uid())
+    )
+  );
 
 drop policy if exists "skills_select_own" on carcanhol.skills;
 create policy "skills_select_own"
   on carcanhol.skills
   for select to authenticated
-  using ((select auth.uid()) = user_id);
+  using (
+    (select auth.uid()) = user_id
+    and exists (
+      select 1
+      from carcanhol.profiles as p
+      where p.id = (select auth.uid())
+    )
+  );
 
 drop policy if exists "skills_insert_own" on carcanhol.skills;
 create policy "skills_insert_own"
   on carcanhol.skills
   for insert to authenticated
-  with check ((select auth.uid()) = user_id);
+  with check (
+    (select auth.uid()) = user_id
+    and exists (
+      select 1
+      from carcanhol.profiles as p
+      where p.id = (select auth.uid())
+    )
+  );
 
 drop policy if exists "skills_update_own" on carcanhol.skills;
 create policy "skills_update_own"
   on carcanhol.skills
   for update to authenticated
-  using ((select auth.uid()) = user_id)
-  with check ((select auth.uid()) = user_id);
+  using (
+    (select auth.uid()) = user_id
+    and exists (
+      select 1
+      from carcanhol.profiles as p
+      where p.id = (select auth.uid())
+    )
+  )
+  with check (
+    (select auth.uid()) = user_id
+    and exists (
+      select 1
+      from carcanhol.profiles as p
+      where p.id = (select auth.uid())
+    )
+  );
 
 drop policy if exists "skills_delete_own" on carcanhol.skills;
 create policy "skills_delete_own"
   on carcanhol.skills
   for delete to authenticated
-  using ((select auth.uid()) = user_id);
+  using (
+    (select auth.uid()) = user_id
+    and exists (
+      select 1
+      from carcanhol.profiles as p
+      where p.id = (select auth.uid())
+    )
+  );
 
 alter default privileges in schema carcanhol
   revoke all on tables from public, anon, authenticated;
