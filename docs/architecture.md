@@ -193,7 +193,98 @@ RLS ativo desde o início (mesmo com 1 utilizador), preparando multiutilizador f
 
 ---
 
-## 9. Notas de implementação da Fase 1 (Foundation)
+## 9. Decisões funcionais para fases futuras (registadas antecipadamente)
+
+> **Nota:** esta secção documenta decisões de produto/arquitetura já validadas
+> com o utilizador para iterações futuras. **Nada aqui é implementado na
+> Fase 1** — são apenas registos para orientar o desenho de UI/BD quando as
+> fases correspondentes (ver secção 8) forem executadas.
+
+### 9.1 Navegação e estrutura de página (fase de frontend detalhado)
+
+- Navegação principal futura: **Início, Pesquisa, Chat, Análises,
+  Administração**.
+- **Fora do âmbito atual**: watchlist e atividade recente não fazem parte
+  da navegação nem da home nesta iteração de desenho.
+- **Home minimalista**: apenas atalhos/acessos rápidos para Pesquisa, Chat,
+  Análises e Administração. Sem "market pulse", sem indicadores de mercado
+  na home.
+
+### 9.2 Direção visual (fase de frontend detalhado)
+
+- Layout financeiro **moderno e sóbrio**, fundo claro, paleta em
+  azul-petróleo/verde.
+- Densidade de informação **compacta**, mas progressivamente expansível
+  (i.e. vistas resumidas com possibilidade de expandir detalhe, não tudo
+  espalhado por omissão).
+- **Sidebar recolhível** em desktop.
+- Em iPhone/iPad: **drawer/menu adaptativo** (não a mesma sidebar de
+  desktop).
+- Mobile-first; nenhuma interação pode depender de hover (tudo acessível
+  por tap/click/foco).
+
+### 9.3 Administração — Conta
+
+- Secção "Conta": permite ver/alterar **email** e **alterar palavra-passe**
+  exclusivamente através do **Supabase Auth** (`supabase.auth.updateUser`
+  ou equivalente).
+- **Nunca** guardar ou gerir palavras-passe numa tabela própria da
+  aplicação — a gestão de credenciais fica inteiramente do lado do
+  Supabase Auth.
+
+### 9.4 Administração — Premissas Globais da IA
+
+- Um **único editor de texto livre** (não estruturado em campos) para as
+  premissas/instruções globais que orientam o comportamento do LLM.
+- **Sem histórico de versões** — existe apenas a versão atual/ativa;
+  substituir é editar essa versão única (sem log de revisões nesta
+  iteração).
+- O backend injeta a versão ativa das Premissas Globais **numa camada
+  superior ao pedido do utilizador** em todas as sessões do agente LLM
+  (i.e. como contexto/system-level, antes/acima da mensagem do
+  utilizador), não como algo que o utilizador possa ver ou editar
+  diretamente na conversa.
+
+### 9.5 Skills — Supabase como fonte de runtime
+
+- A partir da fase em que Skills forem implementadas, o **Supabase passa a
+  ser a fonte oficial em runtime** para as Skills que o agente LLM carrega
+  (via `list_skills` / `load_skill`).
+- A pasta `/skills` no repositório GitHub deixa de ser a fonte de runtime e
+  passa a conter apenas **templates, seeds e documentação** (ponto de
+  partida para popular a base de dados, não o que é lido em produção).
+- `list_skills` / `load_skill` devem ler **apenas Skills com estado
+  `active`** da base de dados.
+- **CRUD completo de Skills na Administração**: visualizar conteúdo,
+  criar, editar, ativar/inativar, remover.
+  - Estados sugeridos: `draft` (rascunho, não visível ao agente),
+    `active` (carregável pelo agente), `inactive` (temporariamente
+    desligada, mas preservada) e, em vez de remoção definitiva (hard
+    delete), um estado adicional **`archived`** — preserva histórico e
+    permite reversão, evitando perda de dados numa remoção acidental. A
+    UI de "remover" nesta fase futura deve mapear para arquivar
+    (`archived`), não para um DELETE físico, salvo decisão explícita em
+    contrário nessa altura.
+
+### 9.6 Criação/alteração de Skills assistida por LLM
+
+- Fluxo dedicado (chat próprio, distinto do chat de análise de
+  investimento): o utilizador descreve o que quer numa Skill em
+  linguagem natural; o LLM gera uma Skill estruturada (equivalente a um
+  `SKILL.md`) e apresenta uma **pré-visualização editável** ao
+  utilizador.
+- O utilizador tem de escolher explicitamente uma de duas ações antes de
+  qualquer persistência ter efeito real no agente:
+  - **Guardar como rascunho** (estado `draft`) — não fica disponível ao
+    agente.
+  - **Guardar e ativar** (estado `active`) — fica imediatamente
+    disponível ao agente.
+- **Nunca ativar uma Skill automaticamente** sem esta escolha explícita do
+  utilizador.
+
+---
+
+## 10. Notas de implementação da Fase 1 (Foundation)
 
 Decisões técnicas tomadas ao implementar esta fase, não 100% especificadas no
 documento original:
