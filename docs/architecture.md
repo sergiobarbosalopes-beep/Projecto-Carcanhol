@@ -1,7 +1,7 @@
 # Arquitetura — Projecto Carcanhol
 
-Versão: 2.0
-Estado: Fase 2 implementada
+Versão: 3.0
+Estado: Fase 3A implementada
 
 ## 1. Objetivo e âmbito atual
 
@@ -10,17 +10,19 @@ de investimentos. A arquitetura futura combinará dados financeiros reais,
 contexto macroeconómico e um agente LLM com tools. O LLM nunca será a fonte
 primária de preços/fundamentais nem executará transações.
 
-A Fase 2 implementa apenas a fundação de produto e administração:
+A Fase 3A implementa a fundação de produto e administração:
 
 - shell responsivo e navegação protegida;
 - autenticação e membership server-side;
 - alteração de palavra-passe;
 - versão atual das premissas globais;
 - gestão manual completa de Skills;
+- gestão de várias contas de fornecedores LLM por utilizador;
+- envelopes AES-256-GCM de credenciais numa tabela service-only;
 - contrato server-only para carregar futuramente Skills ativas.
 
-Pesquisa, Chat, Análises, integração GitHub Models e dados financeiros não
-estão implementados.
+Pesquisa, Chat, Análises, chamadas a fornecedores, validação/descoberta de
+modelos, geração LLM e dados financeiros não estão implementados.
 
 ## 2. Arquitetura de execução
 
@@ -32,7 +34,8 @@ Next.js 16 App Router / Vercel
   ├─ Proxy: refresh de sessão + rejeição antecipada
   ├─ layouts/pages: requireAuthorizedUser()
   ├─ Route Handlers BFF: Zod + same-origin + auth/membership
-  └─ repositórios server-only: anon + sessão, sujeitos a RLS
+  ├─ repositórios server-only: anon + sessão, sujeitos a RLS
+  └─ criação/rotação de segredo: autorização explícita + service role + RPC
   │
   ▼
 Supabase partilhado
@@ -40,8 +43,8 @@ Supabase partilhado
   └─ schema carcanhol (objetos exclusivos desta aplicação)
 ```
 
-O frontend não importa `@supabase/supabase-js`, não recebe a anon key, tokens
-ou service role e não faz acesso direto à Data API. A variável
+O frontend não importa `@supabase/supabase-js`, não recebe a anon key, tokens,
+chaves de cifragem ou service role e não faz acesso direto à Data API. A variável
 `NEXT_PUBLIC_SUPABASE_URL` é publicável; `NEXT_SUPABASE_ANON_KEY` é usada
 exclusivamente por módulos server-only.
 
@@ -62,33 +65,42 @@ cada handler de administração repete o guard junto do acesso aos dados.
 
 ## 4. Fronteira BFF
 
-| Método   | Endpoint                          | Input                    | Efeito                      |
-| -------- | --------------------------------- | ------------------------ | --------------------------- |
-| `POST`   | `/api/auth/login`                 | email, password          | Cria sessão após membership |
-| `POST`   | `/api/auth/logout`                | —                        | Termina a sessão            |
-| `POST`   | `/api/account/password`           | atual, nova, confirmação | Reautentica e atualiza Auth |
-| `PUT`    | `/api/admin/premises`             | content                  | Upsert da versão atual      |
-| `GET`    | `/api/admin/skills`               | page, query, status      | Lista paginada              |
-| `POST`   | `/api/admin/skills`               | campos + status          | Cria Skill                  |
-| `GET`    | `/api/admin/skills/:id`           | UUID                     | Consulta Skill própria      |
-| `PATCH`  | `/api/admin/skills/:id`           | update/lifecycle         | Edita ou muda estado        |
-| `DELETE` | `/api/admin/skills/:id`           | confirmationName         | Elimina não ativa           |
-| `POST`   | `/api/admin/skills/:id/duplicate` | —                        | Duplica como rascunho       |
+| Método   | Endpoint                                 | Input                    | Efeito                      |
+| -------- | ---------------------------------------- | ------------------------ | --------------------------- |
+| `POST`   | `/api/auth/login`                        | email, password          | Cria sessão após membership |
+| `POST`   | `/api/auth/logout`                       | —                        | Termina a sessão            |
+| `POST`   | `/api/account/password`                  | atual, nova, confirmação | Reautentica e atualiza Auth |
+| `PUT`    | `/api/admin/premises`                    | content                  | Upsert da versão atual      |
+| `GET`    | `/api/admin/skills`                      | page, query, status      | Lista paginada              |
+| `POST`   | `/api/admin/skills`                      | campos + status          | Cria Skill                  |
+| `GET`    | `/api/admin/skills/:id`                  | UUID                     | Consulta Skill própria      |
+| `PATCH`  | `/api/admin/skills/:id`                  | update/lifecycle         | Edita ou muda estado        |
+| `DELETE` | `/api/admin/skills/:id`                  | confirmationName         | Elimina não ativa           |
+| `POST`   | `/api/admin/skills/:id/duplicate`        | —                        | Duplica como rascunho       |
+| `GET`    | `/api/admin/llm-accounts`                | —                        | Lista metadados próprios    |
+| `POST`   | `/api/admin/llm-accounts`                | fornecedor/nome/segredo  | Cria conta + segredo        |
+| `PATCH`  | `/api/admin/llm-accounts/:id`            | nome/endpoint            | Edita metadados próprios    |
+| `PUT`    | `/api/admin/llm-accounts/:id/credential` | nova credencial          | Substitui envelope          |
+| `DELETE` | `/api/admin/llm-accounts/:id`            | confirmationName         | Elimina conta + segredo     |
 
 Todos os inputs são validados com Zod. Handlers mutantes exigem um header
 `Origin` correspondente ao origin efetivo, considerando
 `X-Forwarded-Host`/`X-Forwarded-Proto` da Vercel. Todas as respostas explícitas
 usam `Cache-Control: no-store`.
 
-O `user_id` nunca é aceite do cliente: é sempre obtido da sessão validada. A
-service role não é usada nestes endpoints.
+O `user_id` nunca é aceite do cliente: é sempre obtido da sessão validada.
+Operações normais usam anon + sessão. Apenas criação e rotação de segredos
+usam service role, instanciada internamente por código server-only depois de
+revalidar sessão, membership e ownership. As RPCs executam cada alteração numa
+única transação.
 
 ## 5. Schema efetivo
 
 As migrations são aplicadas por ordem e são reexecutáveis:
 
 1. `0001_init_carcanhol_schema.sql`;
-2. `0002_admin_settings_and_skills.sql`.
+2. `0002_admin_settings_and_skills.sql`;
+3. `0003_llm_accounts.sql`.
 
 Nenhuma migration cria objetos de aplicação em `public`.
 
@@ -140,6 +152,43 @@ As funções de trigger pertencem a `carcanhol`, usam `security invoker` e
 `search_path = ''`. A execução direta é revogada a `public`, `anon` e
 `authenticated`.
 
+### Contas e credenciais LLM
+
+`carcanhol.llm_accounts` contém apenas metadados próprios: fornecedor, nome,
+tipo de autenticação, estado (`pending_validation` ou `inactive`), endpoint
+custom HTTPS, sufixo mascarável e metadados de validação futura. O índice
+`lower(btrim(display_name))` impede nomes duplicados por utilizador sem impedir
+várias contas do mesmo fornecedor. Authenticated recebe apenas leitura,
+eliminação e atualização das colunas `display_name`/`custom_endpoint`, sempre
+sob RLS com ownership + membership.
+
+`carcanhol.llm_account_secrets` guarda ciphertext, nonce, auth tag, algoritmo,
+versão do envelope, versão da chave e versão da credencial. Não tem grants nem
+policies para `anon` ou `authenticated`; a service role é a única identidade
+com acesso. Uma constraint trigger diferida exige um segredo 1:1 no commit. A
+criação e a rotação usam RPCs service-only, pelo que conta, envelope, máscara e
+estado mudam atomicamente.
+
+O AES-256-GCM usa nonce aleatório de 96 bits e AAD com versão, `user_id`,
+`account_id` e fornecedor. A chave vem exclusivamente de
+`LLM_CREDENTIAL_ENCRYPTION_KEY`, base64 canónico de 32 bytes, e a sua versão de
+`LLM_CREDENTIAL_ENCRYPTION_KEY_VERSION`. Nunca é persistida. A API projeta
+apenas metadados e `credential_hint`; não seleciona nem serializa a tabela de
+segredos.
+
+### Estruturas para integração futura
+
+- `llm_account_models`: catálogo automaticamente descoberto por conta; cada
+  modelo começa `enabled = false` e exigirá autorização manual;
+- `llm_routing_rules`: modelo geral ou por funcionalidade, onde ordem 0 é o
+  principal e as restantes rows são fallbacks ordenados;
+- `llm_usage_events`: tokens de entrada/saída, latência, estado e custo
+  estimado, sem colunas para prompts ou respostas.
+
+As três tabelas são metadata user-owned com RLS ownership + membership. Nesta
+fase authenticated tem apenas leitura; descoberta, autorização, routing e
+telemetria ainda não têm handlers.
+
 ## 6. Lifecycle de Skills
 
 ```text
@@ -175,7 +224,7 @@ Estes métodos são server-only, criam sempre um cliente anon + sessão, repetem
 sessão e aplicam simultaneamente `user_id` e `status = active`. A RLS volta a
 exigir ownership + membership, pelo que falham fechados e não aceitam a injeção
 de um cliente service role. Serão a base das futuras tools `list_skills` e
-`load_skill`; a Fase 2 não as expõe nem integra um LLM.
+`load_skill`; a Fase 3A não as expõe nem integra um LLM.
 
 As premissas globais serão futuramente injetadas como contexto superior à
 mensagem do utilizador. Nesta fase são apenas persistidas, nunca enviadas a um
@@ -192,16 +241,26 @@ têm área mínima de 44 px, focus visível e transições curtas com
 `motion-reduce`. Markdown é mostrado como plaintext num `<pre>` com wrapping;
 não existe parser HTML nem `dangerouslySetInnerHTML`.
 
+A tab LLM começa por um resumo e apresenta cartões responsivos com fornecedor,
+estado, autenticação, máscara, endpoint e timestamps. Criar, editar, substituir
+credencial e eliminar têm labels explícitas e confirmação reforçada. Não
+existe ação de ativação: todas as contas permanecem “Por validar”. As secções
+de modelos/routing e utilização são informativas e não inventam modelos.
+
 Listas de Skills têm paginação server-side de 20 rows. Textareas têm limites
 equivalentes aos constraints Postgres e à validação Zod.
 
 ## 9. Evolução planeada
 
-1. Integrar provider LLM e agent loop;
-2. ligar premissas globais e as duas operações de Skills ativas;
-3. adicionar registry de fontes financeiras/macro;
-4. implementar Pesquisa, Chat e Análises end-to-end;
-5. reforçar observabilidade, rate limiting e testes de integração.
+1. Implementar validação de credenciais e descoberta automática de modelos;
+2. aplicar proteção SSRF/DNS, redirects, timeouts e limites antes de chamar
+   endpoints custom;
+3. autorizar modelos e configurar routing/fallbacks;
+4. integrar provider LLM e agent loop;
+5. ligar premissas globais e as duas operações de Skills ativas;
+6. adicionar registry de fontes financeiras/macro;
+7. implementar Pesquisa, Chat e Análises end-to-end;
+8. reforçar observabilidade, rate limiting e testes de integração.
 
 Dados financeiros atuais terão sempre origem em tools/providers reais. O
 agente poderá propor candidatos, mas terá de os verificar antes de os

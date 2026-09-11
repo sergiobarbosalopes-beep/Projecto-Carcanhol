@@ -8,7 +8,12 @@ import {
   SKILL_DESCRIPTION_MAX_LENGTH,
   SKILL_NAME_MAX_LENGTH,
 } from "@/src/admin/validation";
-import type { Skill, SkillStatus } from "@/src/types/supabase";
+import type {
+  LlmAccountPublic,
+  Skill,
+  SkillStatus,
+} from "@/src/types/supabase";
+import { LlmPanel } from "./llm-panel";
 
 const TABS = [
   { id: "llm", label: "LLM" },
@@ -28,10 +33,12 @@ const STATUS_LABELS: Record<SkillStatus, string> = {
 
 export function AdminPanel({
   email,
+  initialLlmAccounts,
   initialAssumptions,
   initialSkills,
 }: {
   email: string;
+  initialLlmAccounts: LlmAccountPublic[];
   initialAssumptions: string;
   initialSkills: SkillList;
 }) {
@@ -95,7 +102,7 @@ export function AdminPanel({
           aria-labelledby="admin-tab-llm"
           hidden={activeTab !== "llm"}
         >
-          <LlmPanel />
+          <LlmPanel initialAccounts={initialLlmAccounts} />
         </div>
         <div
           id="admin-panel-skills"
@@ -123,34 +130,6 @@ export function AdminPanel({
         </div>
       </div>
     </section>
-  );
-}
-
-function LlmPanel() {
-  return (
-    <div className="max-w-4xl">
-      <SectionTitle
-        title="Modelos LLM"
-        description="Área reservada aos modelos de linguagem que irão suportar as funcionalidades inteligentes da aplicação."
-      />
-      <div className="mt-6 flex min-h-64 items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50 px-6 py-12 text-center">
-        <div className="max-w-md">
-          <div
-            className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-teal-100 text-sm font-bold text-teal-800"
-            aria-hidden="true"
-          >
-            LLM
-          </div>
-          <h3 className="mt-4 text-lg font-bold text-slate-900">
-            Configuração disponível numa fase posterior
-          </h3>
-          <p className="mt-2 text-sm leading-6 text-slate-600">
-            A seleção e a configuração dos modelos LLM serão desenvolvidas numa
-            fase posterior do projeto.
-          </p>
-        </div>
-      </div>
-    </div>
   );
 }
 

@@ -21,7 +21,7 @@ const SHORTCUTS = [
   {
     href: "/administracao",
     title: "Administração",
-    description: "Gerir a conta, premissas globais e Skills.",
+    description: "Gerir fornecedores LLM, Skills, premissas globais e a conta.",
   },
 ] as const;
 
