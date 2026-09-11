@@ -1,6 +1,6 @@
 # Arquitetura — Projecto Carcanhol
 
-Versão: 3.0
+Versão: 3.1
 Estado: Fase 3A implementada
 
 ## 1. Objetivo e âmbito atual
@@ -18,6 +18,7 @@ A Fase 3A implementa a fundação de produto e administração:
 - versão atual das premissas globais;
 - gestão manual completa de Skills;
 - gestão de várias contas de fornecedores LLM por utilizador;
+- GitHub Copilot como provider canónico, sem execução do SDK;
 - envelopes AES-256-GCM de credenciais numa tabela service-only;
 - contrato server-only para carregar futuramente Skills ativas.
 
@@ -100,7 +101,8 @@ As migrations são aplicadas por ordem e são reexecutáveis:
 
 1. `0001_init_carcanhol_schema.sql`;
 2. `0002_admin_settings_and_skills.sql`;
-3. `0003_llm_accounts.sql`.
+3. `0003_llm_accounts.sql`;
+4. `0004_github_copilot_provider.sql`.
 
 Nenhuma migration cria objetos de aplicação em `public`.
 
@@ -163,11 +165,12 @@ eliminação e atualização das colunas `display_name`/`custom_endpoint`, sempr
 sob RLS com ownership + membership.
 
 `carcanhol.llm_account_secrets` guarda ciphertext, nonce, auth tag, algoritmo,
-versão do envelope, versão da chave e versão da credencial. Não tem grants nem
-policies para `anon` ou `authenticated`; a service role é a única identidade
-com acesso. Uma constraint trigger diferida exige um segredo 1:1 no commit. A
-criação e a rotação usam RPCs service-only, pelo que conta, envelope, máscara e
-estado mudam atomicamente.
+versão do envelope, versão da chave, versão da credencial e o provider
+autenticado no AAD. Não tem grants nem policies para `anon` ou
+`authenticated`; a service role é a única identidade com acesso. Uma
+constraint trigger diferida exige um segredo 1:1 no commit. A criação e a
+rotação usam RPCs service-only, pelo que conta, envelope, máscara e estado
+mudam atomicamente.
 
 O AES-256-GCM usa nonce aleatório de 96 bits e AAD com versão, `user_id`,
 `account_id` e fornecedor. A chave vem exclusivamente de
@@ -175,6 +178,20 @@ O AES-256-GCM usa nonce aleatório de 96 bits e AAD com versão, `user_id`,
 `LLM_CREDENTIAL_ENCRYPTION_KEY_VERSION`. Nunca é persistida. A API projeta
 apenas metadados e `credential_hint`; não seleciona nem serializa a tabela de
 segredos.
+
+A migration `0004` altera o provider canónico de `github_models` para
+`github_copilot`. Antes da alteração, copia para
+`llm_account_secrets.aad_provider` o valor que participou no AAD de cada
+envelope existente; assim, uma credencial antiga continua autenticável sem
+decifração ou recifragem na migration. Uma rotação futura cifra com o provider
+canónico e atualiza esse campo na mesma RPC.
+
+Para GitHub Copilot, a criação manual produz apenas
+`credential_type = fine_grained_pat`. O schema reserva
+`oauth_app_user` e `github_app_user` para integrações user-to-server futuras.
+Os tipos genéricos `token` e `oauth` permanecem permitidos apenas para
+compatibilidade não destrutiva com outros providers; `api_key` não é
+compatível com GitHub Copilot.
 
 ### Estruturas para integração futura
 
@@ -214,6 +231,66 @@ em `inactive`; a ativação posterior é explícita.
 
 ## 7. Contrato futuro com o LLM
 
+### GitHub Copilot
+
+O GitHub Models foi retirado em 30 de julho de 2026. O provider ativo passa a
+ser GitHub Copilot, que exige uma subscrição Copilot salvo quando é usado BYOK.
+Esta fase prepara configuração e persistência, mas não instala
+`@github/copilot-sdk`, não inicia o runtime, não valida tokens e não chama
+modelos.
+
+O onboarding manual aceita exclusivamente um fine-grained PAT `github_pat_`
+da conta pessoal, com a conta pessoal como Resource owner e a Account
+permission `Copilot Requests`. Deve ter um prazo curto e ser guardado quando é
+criado, pois só é mostrado uma vez. A validação local confirma apenas prefixo,
+caracteres e tamanho: não consegue provar a subscrição nem inspecionar a
+permissão. PATs classic `ghp_` são incompatíveis; tokens OAuth `gho_` e GitHub
+App user `ghu_` são suportados pelo SDK, mas ficam reservados para uma futura
+integração OAuth/GitHub App user-to-server e não entram pelo formulário de
+PAT.
+
+O SDK Node inicia um runtime nativo/CLI como child process e usa estado em
+disco. Por isso, não será adicionado às Vercel Functions do Next.js, cujo ciclo
+de vida efémero, filesystem temporário e limites de execução não são adequados
+a esse processo. Esta conclusão sobre Vercel é uma decisão arquitetural
+derivada dos requisitos do SDK; a documentação do GitHub não menciona Vercel
+especificamente. A topologia futura será:
+
+```text
+Browser
+  │ sessão Carcanhol
+  ▼
+Next.js BFF / Vercel
+  │ pedido autenticado e autorizado
+  ▼
+Worker/container Copilot headless, separado e duradouro
+  ├─ uma sessão isolada por utilizador/pedido
+  ├─ token entregue apenas à sessão respetiva
+  ├─ mode: "empty"
+  ├─ tools explicitamente autorizadas
+  └─ estado/runtime fora da Function
+```
+
+O BFF nunca enviará a service role, a chave AES ou envelopes para o browser.
+O worker terá identidade e canal próprios, limites de concorrência e
+timeouts. Esta fase não cria o worker, imagem Docker, endpoint interno ou
+qualquer chamada ao SDK.
+
+OAuth ou GitHub App user-to-server é o desenho recomendado para a futura
+versão web multiutilizador, evitando a recolha manual permanente de PATs. Um
+refresh token futuro, caso exista, continuará cifrado na tabela service-only;
+não será guardado em metadados públicos.
+
+Fontes oficiais:
+[autenticação](https://docs.github.com/en/copilot/how-tos/copilot-sdk/auth/authenticate),
+[backend services](https://docs.github.com/en/copilot/how-tos/copilot-sdk/setup/backend-services),
+[multi-tenancy](https://docs.github.com/en/copilot/how-tos/copilot-sdk/setup/multi-tenancy),
+[runtime incluído](https://github.com/github/copilot-sdk/blob/main/docs/setup/bundled-cli.md)
+e
+[persistência de sessões](https://github.com/github/copilot-sdk/blob/main/docs/features/session-persistence.md).
+
+### Skills e premissas
+
 `src/admin/skills.ts` exporta:
 
 - `listActiveSkills(userId)`, com limite de 100 resumos;
@@ -252,15 +329,19 @@ equivalentes aos constraints Postgres e à validação Zod.
 
 ## 9. Evolução planeada
 
-1. Implementar validação de credenciais e descoberta automática de modelos;
-2. aplicar proteção SSRF/DNS, redirects, timeouts e limites antes de chamar
+1. Implementar o worker/container headless do Copilot SDK e o canal privado
+   com o BFF;
+2. implementar OAuth/GitHub App user-to-server e validação real de
+   credenciais;
+3. implementar descoberta automática de modelos;
+4. aplicar proteção SSRF/DNS, redirects, timeouts e limites antes de chamar
    endpoints custom;
-3. autorizar modelos e configurar routing/fallbacks;
-4. integrar provider LLM e agent loop;
-5. ligar premissas globais e as duas operações de Skills ativas;
-6. adicionar registry de fontes financeiras/macro;
-7. implementar Pesquisa, Chat e Análises end-to-end;
-8. reforçar observabilidade, rate limiting e testes de integração.
+5. autorizar modelos e configurar routing/fallbacks;
+6. integrar provider LLM e agent loop;
+7. ligar premissas globais e as duas operações de Skills ativas;
+8. adicionar registry de fontes financeiras/macro;
+9. implementar Pesquisa, Chat e Análises end-to-end;
+10. reforçar observabilidade, rate limiting e testes de integração.
 
 Dados financeiros atuais terão sempre origem em tools/providers reais. O
 agente poderá propor candidatos, mas terá de os verificar antes de os

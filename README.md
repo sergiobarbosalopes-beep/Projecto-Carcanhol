@@ -28,7 +28,7 @@ triggers globais em `auth.users` e não concedem membership automaticamente.
   ecrãs de telemóvel/tablet;
 - navegação para Início, Pesquisa, Chat, Análises e Administração;
 - administração numa página com tabs responsivas:
-  - **LLM:** várias contas de GitHub Models, Anthropic, Google Gemini,
+  - **LLM:** várias contas de GitHub Copilot, Anthropic, Google Gemini,
     DeepSeek e fornecedores OpenAI-compatible/custom; criação, edição,
     substituição irreversível de credencial e eliminação confirmada;
   - **Skills:** pesquisa paginada, criação manual, consulta, edição,
@@ -77,6 +77,7 @@ database/migrations/
   0001_init_carcanhol_schema.sql
   0002_admin_settings_and_skills.sql
   0003_llm_accounts.sql
+  0004_github_copilot_provider.sql
 docs/architecture.md
 ```
 
@@ -125,7 +126,8 @@ docs/architecture.md
 
    1. `database/migrations/0001_init_carcanhol_schema.sql`;
    2. `database/migrations/0002_admin_settings_and_skills.sql`;
-   3. `database/migrations/0003_llm_accounts.sql`.
+   3. `database/migrations/0003_llm_accounts.sql`;
+   4. `database/migrations/0004_github_copilot_provider.sql`.
 
    A segunda migration cria `carcanhol.global_assumptions`,
    `carcanhol.skills`, índices, triggers locais de `updated_at`, a proteção
@@ -133,7 +135,9 @@ docs/architecture.md
    exigem simultaneamente ownership e membership em `carcanhol.profiles`.
    A terceira cria os metadados de contas, a tabela service-only de envelopes
    cifrados e estruturas futuras para modelos descobertos, routing e eventos
-   de utilização.
+   de utilização. A quarta substitui o fornecedor retirado GitHub Models por
+   GitHub Copilot, migra as contas existentes e preserva o provider usado no
+   AAD dos envelopes AES-256-GCM já cifrados.
 
 4. Em **Project Settings → API → Exposed schemas**, adicionar `carcanhol`.
 
@@ -152,6 +156,34 @@ docs/architecture.md
    ```bash
    npm run dev
    ```
+
+### Credencial manual do GitHub Copilot
+
+O GitHub Models foi retirado em 30 de julho de 2026 e já não é uma opção
+ativa. Esta fase apenas guarda a credencial para a futura integração com o
+GitHub Copilot SDK; não instala o SDK, não valida permissões e não faz chamadas
+a LLM.
+
+Para o onboarding manual:
+
+1. Na conta pessoal do GitHub que tem acesso ao Copilot, criar um
+   **fine-grained personal access token**;
+2. escolher a conta pessoal como **Resource owner**;
+3. conceder a Account permission **Copilot Requests**;
+4. definir um prazo curto e guardar o token quando for apresentado, porque só
+   fica visível uma vez;
+5. introduzir em **Administração → LLM** o token com prefixo `github_pat_`.
+
+O valor não é a password, um token Vercel, um token GitHub Models nem um PAT
+classic `ghp_`. A aplicação valida apenas o formato sem expor o segredo; não
+consegue inspecionar localmente a permissão `Copilot Requests`. A validação
+real fica para a integração futura.
+
+O SDK também suporta tokens de utilizador OAuth `gho_` e GitHub App `ghu_`,
+mas estes tipos estão apenas preparados no schema e são rejeitados pelo
+formulário manual. OAuth/GitHub App user-to-server será a opção recomendada
+para uma aplicação web multiutilizador. O acesso normal requer uma subscrição
+GitHub Copilot; BYOK é a exceção documentada pelo SDK.
 
 ## Scripts
 
@@ -187,6 +219,8 @@ docs/architecture.md
   tabela de segredos não tem grants nem policies para `anon`/`authenticated`.
 - A API devolve apenas uma máscara com o sufixo da credencial; ciphertext,
   nonce, auth tag, chave e payloads sensíveis nunca são serializados.
+- Mensagens de validação identificam formatos de token incompatíveis sem
+  repetir o valor submetido.
 
 ### Rotação da chave mestra LLM
 
@@ -208,3 +242,22 @@ controlar redirects e aplicar timeouts e limites de resposta contra SSRF.
 A integração Vercel usa as seis variáveis acima. O CI em
 `.github/workflows/ci.yml` executa instalação reprodutível, lint, type-check e
 testes/build com valores placeholder, sem acesso a credenciais reais.
+
+O futuro runtime do Copilot SDK não será instalado nem executado nas Vercel
+Functions do Next.js. O SDK Node gere um processo nativo/CLI pesado e estado
+em disco, incompatíveis com o ciclo de vida efémero e os limites de uma
+Function. A arquitetura prevista usa um worker/container headless separado,
+sessões com `mode: "empty"`, token isolado por sessão e apenas tools
+explicitamente autorizadas. O BFF Next.js autenticará o utilizador e comunicará
+com esse worker; esta fase não cria ainda o serviço, Dockerfile ou chamadas ao
+SDK.
+
+### Fontes oficiais
+
+- [Retirada do GitHub Models](https://docs.github.com/en/github-models);
+- [Autenticação do GitHub Copilot SDK](https://docs.github.com/en/copilot/how-tos/copilot-sdk/auth/authenticate);
+- [Criação do fine-grained PAT para Copilot](https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli);
+- [GitHub Copilot SDK e requisitos de subscrição/BYOK](https://github.com/github/copilot-sdk);
+- [Backend services](https://docs.github.com/en/copilot/how-tos/copilot-sdk/setup/backend-services)
+  e
+  [multi-tenancy](https://docs.github.com/en/copilot/how-tos/copilot-sdk/setup/multi-tenancy).
