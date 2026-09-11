@@ -43,7 +43,7 @@ tests/                Reservado para testes automatizados futuros
 
 ## Pré-requisitos
 
-- Node.js 20+ e npm.
+- Node.js 22+ e npm (requerido pelas dependências `@supabase/*` atuais).
 - Um projeto Supabase (pode ser o mesmo usado por outras aplicações — esta
   app só escreve no schema `carcanhol`).
 
