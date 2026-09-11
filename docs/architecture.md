@@ -223,19 +223,30 @@ RLS ativo desde o início (mesmo com 1 utilizador), preparando multiutilizador f
 - Mobile-first; nenhuma interação pode depender de hover (tudo acessível
   por tap/click/foco).
 
-### 9.3 Administração — Conta
+### 9.3 Administração — estrutura da página (3 tabs)
 
-- Secção "Conta": permite ver/alterar **email** e **alterar palavra-passe**
+- Administração é uma **única página com 3 tabs**: **Conta**, **Premissas
+  globais**, **Skills**.
+- Em mobile, as tabs adaptam-se a uma das seguintes formas (a decidir em
+  desenho de UI dessa fase, ambas aceitáveis): **navegação horizontal
+  rolável** (tabs em linha, scroll horizontal) ou **seletor compacto**
+  (ex.: dropdown/segmented control). Em qualquer dos casos, mobile-first e
+  sem depender de hover.
+
+### 9.4 Administração — Conta
+
+- Tab "Conta": permite ver/alterar **email** e **alterar palavra-passe**
   exclusivamente através do **Supabase Auth** (`supabase.auth.updateUser`
   ou equivalente).
 - **Nunca** guardar ou gerir palavras-passe numa tabela própria da
   aplicação — a gestão de credenciais fica inteiramente do lado do
   Supabase Auth.
 
-### 9.4 Administração — Premissas Globais da IA
+### 9.5 Administração — Premissas Globais da IA
 
-- Um **único editor de texto livre** (não estruturado em campos) para as
-  premissas/instruções globais que orientam o comportamento do LLM.
+- Tab "Premissas globais": um **único editor de texto livre** (não
+  estruturado em campos) para as premissas/instruções globais que
+  orientam o comportamento do LLM.
 - **Sem histórico de versões** — existe apenas a versão atual/ativa;
   substituir é editar essa versão única (sem log de revisões nesta
   iteração).
@@ -245,28 +256,37 @@ RLS ativo desde o início (mesmo com 1 utilizador), preparando multiutilizador f
   utilizador), não como algo que o utilizador possa ver ou editar
   diretamente na conversa.
 
-### 9.5 Skills — Supabase como fonte de runtime
+### 9.6 Administração — Skills: modelo e ciclo de vida
 
-- A partir da fase em que Skills forem implementadas, o **Supabase passa a
-  ser a fonte oficial em runtime** para as Skills que o agente LLM carrega
-  (via `list_skills` / `load_skill`).
+- Tab "Skills": **Supabase passa a ser a fonte oficial em runtime** para as
+  Skills que o agente LLM carrega (via `list_skills` / `load_skill`) a
+  partir da fase em que Skills forem implementadas.
 - A pasta `/skills` no repositório GitHub deixa de ser a fonte de runtime e
   passa a conter apenas **templates, seeds e documentação** (ponto de
   partida para popular a base de dados, não o que é lido em produção).
 - `list_skills` / `load_skill` devem ler **apenas Skills com estado
   `active`** da base de dados.
-- **CRUD completo de Skills na Administração**: visualizar conteúdo,
-  criar, editar, ativar/inativar, remover.
-  - Estados sugeridos: `draft` (rascunho, não visível ao agente),
-    `active` (carregável pelo agente), `inactive` (temporariamente
-    desligada, mas preservada) e, em vez de remoção definitiva (hard
-    delete), um estado adicional **`archived`** — preserva histórico e
-    permite reversão, evitando perda de dados numa remoção acidental. A
-    UI de "remover" nesta fase futura deve mapear para arquivar
-    (`archived`), não para um DELETE físico, salvo decisão explícita em
-    contrário nessa altura.
+- **Modelo de dados de cada Skill**: campos separados `name`,
+  `description`, `status`, mais um **único editor Markdown** para o
+  conteúdo/instruções da Skill (equivalente ao corpo de um `SKILL.md`).
+- **Estados**: `draft` (rascunho, não visível ao agente), `active`
+  (carregável pelo agente), `inactive` (desativada, preservada) e
+  `archived` (arquivada, preservada, fora da gestão ativa do dia a dia).
+- **Gestão de ciclo de vida na Administração** — CRUD completo (visualizar
+  conteúdo, criar, editar) mais as seguintes ações de estado:
+  - **Desativar** (`active` → `inactive`).
+  - **Arquivar / Restaurar** (para/de `archived`).
+  - **Eliminar definitivamente** (hard delete) — o utilizador optou por
+    ter **ambas** as opções, arquivar _e_ eliminar definitivamente (não
+    apenas arquivar). Regras:
+    - Exige **confirmação reforçada** (ex.: diálogo de confirmação
+      distinto do habitual, podendo pedir para escrever o nome da Skill
+      ou equivalente) antes de executar.
+    - Uma Skill em estado `active` **tem de ser desativada primeiro**
+      (`inactive`) antes de poder ser eliminada definitivamente — não é
+      possível eliminar diretamente uma Skill ativa.
 
-### 9.6 Criação/alteração de Skills assistida por LLM
+### 9.7 Criação/alteração de Skills assistida por LLM
 
 - Fluxo dedicado (chat próprio, distinto do chat de análise de
   investimento): o utilizador descreve o que quer numa Skill em
