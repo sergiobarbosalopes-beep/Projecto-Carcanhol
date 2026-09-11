@@ -1,6 +1,7 @@
 import { AuthorizationError, requireAuthorizedUser } from "@/src/auth/server";
 import {
   LlmAccountLifecycleError,
+  LlmCredentialValidationError,
   replaceLlmCredential,
 } from "@/src/admin/llm-accounts";
 import {
@@ -63,6 +64,10 @@ export async function PUT(
   } catch (error) {
     if (error instanceof AuthorizationError) {
       return jsonError("Sessão inválida ou sem acesso.", 401);
+    }
+
+    if (error instanceof LlmCredentialValidationError) {
+      return jsonError(error.message, 400);
     }
 
     if (error instanceof LlmAccountLifecycleError) {

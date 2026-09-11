@@ -78,6 +78,7 @@ export type LlmAccountPublic = Omit<
 type LlmAccountSecret = {
   account_id: string;
   user_id: string;
+  aad_provider: string;
   ciphertext: string;
   nonce: string;
   auth_tag: string;

@@ -3,6 +3,7 @@ import {
   createLlmAccount,
   listLlmAccounts,
   LlmAccountConflictError,
+  LlmCredentialValidationError,
 } from "@/src/admin/llm-accounts";
 import { createLlmAccountSchema } from "@/src/admin/llm-validation";
 import { createClient } from "@/src/database/server";
@@ -43,8 +44,14 @@ export async function POST(request: Request) {
   const input = createLlmAccountSchema.safeParse(body);
 
   if (!input.success) {
+    const credentialIssues = input.error.issues.filter(
+      (issue) => issue.path[0] === "credential"
+    );
+    const credentialIssue = credentialIssues[credentialIssues.length - 1];
+
     return jsonError(
-      "Revise o fornecedor, nome, credencial e endpoint da conta.",
+      credentialIssue?.message ??
+        "Revise o fornecedor, nome, credencial e endpoint da conta.",
       400
     );
   }
@@ -65,6 +72,10 @@ export async function POST(request: Request) {
 
     if (error instanceof LlmAccountConflictError) {
       return jsonError(error.message, 409);
+    }
+
+    if (error instanceof LlmCredentialValidationError) {
+      return jsonError(error.message, 400);
     }
 
     return jsonError("Não foi possível criar a conta LLM.", 500);
