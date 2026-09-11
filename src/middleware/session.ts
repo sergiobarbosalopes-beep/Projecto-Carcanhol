@@ -13,7 +13,13 @@ import { getAuthEnv, getPublicEnv } from "@/src/utils/env";
 import { hasCarcanholMembership } from "@/src/auth/membership";
 
 /** Route prefixes that require an authenticated user. */
-const PROTECTED_PATHS = ["/dashboard"];
+const PROTECTED_PATHS = [
+  "/dashboard",
+  "/pesquisa",
+  "/chat",
+  "/analises",
+  "/administracao",
+];
 
 function isProtectedPath(pathname: string): boolean {
   return PROTECTED_PATHS.some(

@@ -27,7 +27,7 @@ export function BrandLogo({
         viewBox="0 0 32 32"
         aria-hidden="true"
         focusable="false"
-        className={`shrink-0 text-teal-700 dark:text-teal-400 ${iconClassName}`}
+        className={`shrink-0 text-teal-700 ${iconClassName}`}
       >
         {/* Abstract ascending bars + trend line: growth / analysis symbol. */}
         <rect x="4" y="18" width="5" height="10" rx="1" fill="currentColor" />
@@ -50,7 +50,7 @@ export function BrandLogo({
           opacity="0.55"
         />
       </svg>
-      <span className={`text-zinc-900 dark:text-zinc-50 ${textClassName}`}>
+      <span className={`text-slate-950 ${textClassName}`}>
         Projecto Carcanhol
       </span>
     </span>

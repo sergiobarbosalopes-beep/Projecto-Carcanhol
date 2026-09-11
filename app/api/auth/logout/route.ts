@@ -1,7 +1,14 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/src/database/server";
+import { rejectCrossOrigin } from "@/src/http/api";
 
-export async function POST() {
+export async function POST(request: Request) {
+  const originError = rejectCrossOrigin(request);
+
+  if (originError) {
+    return originError;
+  }
+
   try {
     const supabase = await createClient();
     const { error } = await supabase.auth.signOut();
