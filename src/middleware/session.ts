@@ -1,5 +1,5 @@
 /**
- * Session refresh + route protection helper used by the root `middleware.ts`.
+ * Session refresh + route protection helper used by the root `proxy.ts`.
  *
  * Supabase's SSR auth relies on cookies that must be refreshed on every
  * request; this also lets us redirect unauthenticated users away from
@@ -9,6 +9,7 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import type { Database } from "@/src/types/supabase";
 import { getPublicEnv } from "@/src/utils/env";
+import { hasCarcanholMembership } from "@/src/auth/membership";
 
 /** Route prefixes that require an authenticated user. */
 const PROTECTED_PATHS = ["/dashboard"];
@@ -17,6 +18,31 @@ function isProtectedPath(pathname: string): boolean {
   return PROTECTED_PATHS.some(
     (path) => pathname === path || pathname.startsWith(`${path}/`)
   );
+}
+
+function redirectToLogin(
+  request: NextRequest,
+  supabaseResponse: NextResponse,
+  options: { redirectedFrom?: string; accessDenied?: boolean } = {}
+) {
+  const redirectUrl = request.nextUrl.clone();
+  redirectUrl.pathname = "/login";
+  redirectUrl.search = "";
+
+  if (options.redirectedFrom) {
+    redirectUrl.searchParams.set("redirectedFrom", options.redirectedFrom);
+  }
+
+  if (options.accessDenied) {
+    redirectUrl.searchParams.set("error", "access_denied");
+  }
+
+  const redirectResponse = NextResponse.redirect(redirectUrl);
+  supabaseResponse.cookies
+    .getAll()
+    .forEach((cookie) => redirectResponse.cookies.set(cookie));
+
+  return redirectResponse;
 }
 
 export async function updateSession(request: NextRequest) {
@@ -58,11 +84,23 @@ export async function updateSession(request: NextRequest) {
 
   const { pathname } = request.nextUrl;
 
-  if (!user && isProtectedPath(pathname)) {
-    const redirectUrl = request.nextUrl.clone();
-    redirectUrl.pathname = "/login";
-    redirectUrl.searchParams.set("redirectedFrom", pathname);
-    return NextResponse.redirect(redirectUrl);
+  if (!isProtectedPath(pathname)) {
+    return supabaseResponse;
+  }
+
+  if (!user) {
+    return redirectToLogin(request, supabaseResponse, {
+      redirectedFrom: pathname,
+    });
+  }
+
+  const hasMembership = await hasCarcanholMembership(supabase, user.id);
+
+  if (!hasMembership) {
+    await supabase.auth.signOut({ scope: "local" });
+    return redirectToLogin(request, supabaseResponse, {
+      accessDenied: true,
+    });
   }
 
   return supabaseResponse;

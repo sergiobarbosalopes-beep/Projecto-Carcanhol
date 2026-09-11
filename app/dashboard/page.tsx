@@ -1,24 +1,16 @@
-import { redirect } from "next/navigation";
-import { createClient } from "@/src/database/server";
+import { requireAuthorizedUser } from "@/src/auth/server";
 import { BrandLogo } from "@/src/components/brand-logo";
 import LogoutButton from "./logout-button";
 
 /**
  * Protected placeholder dashboard. Access control is enforced twice:
- * 1. `middleware.ts` redirects unauthenticated requests before this page runs.
- * 2. This server component re-checks the session as defense in depth.
+ * 1. `proxy.ts` rejects requests without a valid session + app membership.
+ * 2. This server component repeats both checks as defense in depth.
  *
  * No business features yet (Fase 1 scope) — just a welcome placeholder.
  */
 export default async function DashboardPage() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    redirect("/login");
-  }
+  const user = await requireAuthorizedUser();
 
   return (
     <div className="flex min-h-screen w-full flex-col bg-zinc-50 dark:bg-black">

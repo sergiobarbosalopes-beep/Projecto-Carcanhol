@@ -49,10 +49,10 @@ tests/                Reservado para testes automatizados futuros
 
 ## Configuração local
 
-1. Instalar dependências:
+1. Instalar dependências de forma reprodutível:
 
    ```bash
-   npm install
+   npm ci
    ```
 
 2. Copiar o ficheiro de exemplo de variáveis de ambiente:
@@ -68,13 +68,13 @@ tests/                Reservado para testes automatizados futuros
    - `SUPABASE_SERVICE_ROLE_KEY` (secreta — nunca commitar, nunca expor ao browser)
    - `SUPABASE_SCHEMA=carcanhol`
 
-4. Aplicar a migration SQL no Supabase:
+4. **Aplicar primeiro a migration SQL** no Supabase:
    - Abrir o Supabase Dashboard → **SQL Editor** (no projeto partilhado).
    - Colar e correr o conteúdo de
      `database/migrations/0001_init_carcanhol_schema.sql`.
-   - Isto cria o schema `carcanhol`, a tabela `carcanhol.profiles`, as
-     policies de RLS, e um trigger que cria automaticamente um perfil
-     quando um novo utilizador é criado em `auth.users`.
+   - Isto cria o schema `carcanhol`, a allowlist
+     `carcanhol.profiles` e a policy de RLS que permite a cada utilizador
+     autenticado consultar apenas a sua própria membership.
 
 5. **Expor o schema `carcanhol` na Data API** (passo fácil de esquecer):
    - Supabase Dashboard → Project Settings → **API** → **Exposed schemas** →
@@ -82,11 +82,24 @@ tests/                Reservado para testes automatizados futuros
    - Sem este passo, os pedidos dos clientes Supabase configurados com
      `schema: "carcanhol"` falham com erro de schema não encontrado.
 
-6. Criar o(s) utilizador(es) manualmente (não há registo público):
+6. **Criar depois o utilizador manualmente** (não há registo público):
    - Supabase Dashboard → **Authentication** → **Users** → **Add user** →
      definir email + palavra-passe.
+   - Abrir o utilizador criado e copiar o seu **UUID**.
 
-7. Correr o servidor de desenvolvimento:
+7. **Autorizar por fim esse UUID no Carcanhol**:
+   - No Supabase Dashboard → **SQL Editor**, substituir `UUID` e `EMAIL`
+     pelos valores do utilizador e executar exatamente:
+
+     ```sql
+     insert into carcanhol.profiles (id,email) values ('UUID','EMAIL');
+     ```
+
+   - A ordem obrigatória é **migration → user em Authentication → INSERT na
+     allowlist**. Criar apenas o utilizador em Authentication não concede
+     acesso à aplicação.
+
+8. Correr o servidor de desenvolvimento:
 
    ```bash
    npm run dev
@@ -126,7 +139,15 @@ direta do Vercel com o GitHub (ver secção seguinte).
 ## Autenticação — nota de âmbito
 
 Esta fase implementa **apenas login** (email/password), sem registo
-público. As contas são criadas manualmente pelo administrador no Supabase
-Dashboard. As rotas `/dashboard` (e futuras rotas de negócio) são protegidas
-por `middleware.ts`, que redireciona utilizadores não autenticados para
-`/login`.
+público. Uma sessão Supabase válida não basta: o UUID também tem de existir
+em `carcanhol.profiles`, que funciona como allowlist explícita da aplicação.
+O Proxy e os Server Components protegidos validam sessão + membership usando
+a anon key, a sessão do utilizador e RLS; a service role nunca é usada no
+browser.
+
+Num projeto Supabase partilhado, **não desativar globalmente o signup** se
+essa definição afetar as outras aplicações. O Carcanhol não expõe qualquer
+fluxo de signup, e a row em `carcanhol.profiles` é a barreira de autorização
+que isola os utilizadores desta app. Futuras Route Handlers protegidas devem
+usar `requireAuthorizedUser()` (ou `getAuthorizedUser()` quando precisarem de
+devolver explicitamente JSON 401/403) de `src/auth/server.ts`.

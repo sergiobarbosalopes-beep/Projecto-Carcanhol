@@ -3,8 +3,12 @@
 import { Suspense, useState, type FormEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/src/database/client";
+import { hasCarcanholMembership } from "@/src/auth/membership";
 import { sanitizeRedirectPath } from "@/src/utils/redirect";
 import { BrandLogo } from "@/src/components/brand-logo";
+
+const GENERIC_LOGIN_ERROR =
+  "Não foi possível iniciar sessão. Verifique os dados ou contacte o administrador.";
 
 /**
  * Login page (email/password only).
@@ -27,11 +31,14 @@ function LoginForm() {
   const redirectedFrom = sanitizeRedirectPath(
     searchParams.get("redirectedFrom")
   );
+  const accessWasDenied = searchParams.get("error") === "access_denied";
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(
+    accessWasDenied ? GENERIC_LOGIN_ERROR : null
+  );
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -39,15 +46,30 @@ function LoginForm() {
     setIsSubmitting(true);
 
     const supabase = createClient();
-    const { error } = await supabase.auth.signInWithPassword({
+    const { data, error } = await supabase.auth.signInWithPassword({
       email,
       password,
     });
 
-    setIsSubmitting(false);
+    if (error || !data.user) {
+      setIsSubmitting(false);
+      setErrorMessage(GENERIC_LOGIN_ERROR);
+      return;
+    }
 
-    if (error) {
-      setErrorMessage("Email ou palavra-passe incorretos. Tente novamente.");
+    let hasMembership = false;
+
+    try {
+      hasMembership = await hasCarcanholMembership(supabase, data.user.id);
+    } catch {
+      // The UI intentionally uses the same response as invalid credentials,
+      // while the authorization helper fails closed on lookup errors.
+    }
+
+    if (!hasMembership) {
+      await supabase.auth.signOut({ scope: "local" });
+      setIsSubmitting(false);
+      setErrorMessage(GENERIC_LOGIN_ERROR);
       return;
     }
 

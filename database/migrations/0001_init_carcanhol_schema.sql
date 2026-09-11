@@ -16,13 +16,15 @@
 -- 1. Dedicated schema for this app -------------------------------------------------
 create schema if not exists carcanhol;
 
--- Allow the standard Supabase roles to use the schema. Table-level access is
--- still governed by GRANTs below + Row Level Security policies.
-grant usage on schema carcanhol to anon, authenticated, service_role;
+-- Anonymous users do not need Data API access to this app schema. Authenticated
+-- requests use the schema only after Supabase Auth has established a session.
+revoke all on schema carcanhol from public, anon;
+grant usage on schema carcanhol to authenticated, service_role;
 
 -- 2. profiles table -----------------------------------------------------------------
--- One row per Supabase Auth user (auth.users), holding app-specific profile data.
--- Kept intentionally minimal in Phase 1.
+-- Explicit app allowlist: a Supabase Auth user belongs to Carcanhol only when
+-- an administrator inserts that user's UUID here. There is deliberately no
+-- auth.users trigger because the Supabase project is shared with other apps.
 create table if not exists carcanhol.profiles (
   id uuid primary key references auth.users (id) on delete cascade,
   email text,
@@ -30,15 +32,18 @@ create table if not exists carcanhol.profiles (
 );
 
 comment on table carcanhol.profiles is
-  'Carcanhol app profile, 1:1 with auth.users. Lives in the carcanhol schema (shared Supabase project).';
+  'Explicit Carcanhol membership allowlist keyed by auth.users.id.';
 
--- Default privileges for future tables created in this schema by this role.
-alter default privileges in schema carcanhol
-  grant select, insert, update, delete on tables to authenticated;
-
-grant select, insert, update, delete on carcanhol.profiles to authenticated;
-grant select on carcanhol.profiles to anon;
+-- Membership is administered in the SQL Editor, not by app users. Authenticated
+-- clients only need to read their own row; anon receives no table privileges.
+revoke all on carcanhol.profiles from public, anon, authenticated;
+grant select on carcanhol.profiles to authenticated;
 grant all on carcanhol.profiles to service_role;
+
+-- Do not grant future app tables to authenticated users implicitly. Each table
+-- must receive only the privileges required by its own access pattern.
+alter default privileges in schema carcanhol
+  revoke all on tables from public, anon, authenticated;
 
 -- 3. Row Level Security ---------------------------------------------------------------
 alter table carcanhol.profiles enable row level security;
@@ -51,50 +56,12 @@ create policy "profiles_select_own"
   to authenticated
   using (auth.uid() = id);
 
--- Each user can only insert their own profile row.
+-- Remove obsolete draft policies/automation if an earlier version of this
+-- not-yet-production migration was tested in the shared project.
 drop policy if exists "profiles_insert_own" on carcanhol.profiles;
-create policy "profiles_insert_own"
-  on carcanhol.profiles
-  for insert
-  to authenticated
-  with check (auth.uid() = id);
-
--- Each user can only update their own profile.
 drop policy if exists "profiles_update_own" on carcanhol.profiles;
-create policy "profiles_update_own"
-  on carcanhol.profiles
-  for update
-  to authenticated
-  using (auth.uid() = id)
-  with check (auth.uid() = id);
+drop trigger if exists carcanhol_on_auth_user_created on auth.users;
+drop function if exists carcanhol.handle_new_user();
 
 -- No delete policy: profiles are removed automatically via the
 -- `on delete cascade` foreign key when the auth.users row is deleted.
-
--- 4. Auto-create a profile row whenever a new auth user is created -------------------
--- search_path is intentionally empty: this is a SECURITY DEFINER function in
--- a shared database, so every identifier below is fully-qualified to avoid
--- any risk of resolving to an object from another schema/app.
-create or replace function carcanhol.handle_new_user()
-returns trigger
-language plpgsql
-security definer
-set search_path = ''
-as $$
-begin
-  insert into carcanhol.profiles (id, email)
-  values (new.id, new.email)
-  on conflict (id) do nothing;
-  return new;
-end;
-$$;
-
--- Trigger name is namespaced with the "carcanhol_" prefix (even though it
--- lives on auth.users, outside our schema) so that dropping/recreating it
--- can never affect a trigger belonging to another app in this shared
--- Supabase project.
-drop trigger if exists carcanhol_on_auth_user_created on auth.users;
-create trigger carcanhol_on_auth_user_created
-  after insert on auth.users
-  for each row
-  execute function carcanhol.handle_new_user();
