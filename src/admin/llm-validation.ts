@@ -15,6 +15,10 @@ export const LLM_ACCOUNT_NAME_MAX_LENGTH = 120;
 export const LLM_CREDENTIAL_MAX_LENGTH = 4096;
 export const LLM_CUSTOM_ENDPOINT_MAX_LENGTH = 2048;
 
+// Keep this equivalent to llm_accounts_endpoint_by_provider in migration 0003.
+const CUSTOM_ENDPOINT_DATABASE_PATTERN =
+  /^https:\/\/[^/?#@\s]+(?:\/[^?#@\s]*)?$/;
+
 const displayNameSchema = z
   .string()
   .trim()
@@ -31,9 +35,17 @@ const credentialSchema = z
 
 const strictHttpsEndpointSchema = z
   .string()
-  .trim()
   .max(LLM_CUSTOM_ENDPOINT_MAX_LENGTH)
   .transform((value, context) => {
+    if (!CUSTOM_ENDPOINT_DATABASE_PATTERN.test(value)) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "O endpoint deve usar HTTPS e não pode incluir credenciais, parâmetros, fragmentos, @ ou espaços.",
+      });
+      return z.NEVER;
+    }
+
     let endpoint: URL;
 
     try {
@@ -46,23 +58,26 @@ const strictHttpsEndpointSchema = z
       return z.NEVER;
     }
 
-    if (
-      endpoint.protocol !== "https:" ||
-      !endpoint.hostname ||
-      endpoint.username ||
-      endpoint.password ||
-      endpoint.search ||
-      endpoint.hash
-    ) {
+    if (endpoint.protocol !== "https:" || !endpoint.hostname) {
       context.addIssue({
         code: "custom",
-        message:
-          "O endpoint deve usar HTTPS e não pode incluir credenciais, parâmetros ou fragmentos.",
+        message: "Indique um endpoint HTTPS válido.",
       });
       return z.NEVER;
     }
 
-    return endpoint.toString().replace(/\/$/, "");
+    const normalizedEndpoint = endpoint.toString().replace(/\/$/, "");
+
+    if (!CUSTOM_ENDPOINT_DATABASE_PATTERN.test(normalizedEndpoint)) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "O endpoint normalizado não é compatível com o formato seguro.",
+      });
+      return z.NEVER;
+    }
+
+    return normalizedEndpoint;
   });
 
 const optionalEndpointSchema = z.preprocess(

@@ -66,23 +66,53 @@ test("AES-256-GCM rejects a modified authentication tag", () => {
 });
 
 test("validates provider-specific endpoints without accepting headers", () => {
-  const custom = createLlmAccountSchema.parse({
-    provider: "openai_compatible",
-    displayName: "Fornecedor custom",
-    credential: "custom-api-key",
-    customEndpoint: "https://llm.example.com/v1/",
-  });
+  const validEndpoints = [
+    ["https://a.example.com", "https://a.example.com"],
+    ["https://a.example.com/", "https://a.example.com"],
+    ["https://a.example.com/v1/", "https://a.example.com/v1"],
+    [
+      "https://a.example.com:8443/provider/v1",
+      "https://a.example.com:8443/provider/v1",
+    ],
+  ];
 
-  assert.equal(custom.customEndpoint, "https://llm.example.com/v1");
-  assert.equal(
-    createLlmAccountSchema.safeParse({
+  for (const [input, expected] of validEndpoints) {
+    const parsed = createLlmAccountSchema.parse({
       provider: "openai_compatible",
-      displayName: "HTTP inseguro",
+      displayName: "Fornecedor custom",
       credential: "custom-api-key",
-      customEndpoint: "http://llm.example.com/v1",
-    }).success,
-    false
-  );
+      customEndpoint: input,
+    });
+
+    assert.equal(parsed.customEndpoint, expected);
+  }
+
+  const invalidEndpoints = [
+    "http://a.example.com/v1",
+    "https://a.example.com/v1?",
+    "https://a.example.com/v1?model=x",
+    "https://a.example.com/v1#",
+    "https://a.example.com/v1#models",
+    "https://user:password@a.example.com/v1",
+    "https://a.example.com/v1@beta",
+    " https://a.example.com/v1",
+    "https://a.example.com/v1 ",
+    "https://a.example.com/v 1",
+  ];
+
+  for (const customEndpoint of invalidEndpoints) {
+    assert.equal(
+      createLlmAccountSchema.safeParse({
+        provider: "openai_compatible",
+        displayName: "Endpoint rejeitado antes da BD",
+        credential: "custom-api-key",
+        customEndpoint,
+      }).success,
+      false,
+      customEndpoint
+    );
+  }
+
   assert.equal(
     createLlmAccountSchema.safeParse({
       provider: "anthropic",
