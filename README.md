@@ -1,4 +1,4 @@
-# Carcanhol — Plataforma de Análise e Recomendação de Investimentos com IA
+# Projecto Carcanhol — Plataforma de Análise e Recomendação de Investimentos com IA
 
 Aplicação web (Next.js, App Router) de apoio à decisão de investimento, com
 análise temática/sectorial combinando dados financeiros reais, conjuntura

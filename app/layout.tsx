@@ -14,7 +14,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Carcanhol — Plataforma de Análise e Recomendação de Investimentos",
+  title:
+    "Projecto Carcanhol — Plataforma de Análise e Recomendação de Investimentos",
   description:
     "Plataforma de análise e recomendação de investimentos com apoio de IA.",
 };

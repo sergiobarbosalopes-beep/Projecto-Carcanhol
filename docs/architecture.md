@@ -302,6 +302,52 @@ RLS ativo desde o início (mesmo com 1 utilizador), preparando multiutilizador f
 - **Nunca ativar uma Skill automaticamente** sem esta escolha explícita do
   utilizador.
 
+### 9.8 Identidade visual: marca "Projecto Carcanhol"
+
+- Nome público apresentado na UI e nos metadados (título de página,
+  descrição) é **"Projecto Carcanhol"**. Nomes técnicos (schema Postgres
+  `carcanhol`, nomes de pacotes/repositório, variáveis de ambiente) mantêm-se
+  inalterados.
+- Marca aplicada através de um componente reutilizável e muito leve
+  (`BrandLogo`), usado no login e no dashboard (e reutilizável em páginas
+  futuras): símbolo abstrato inline em SVG (barras ascendentes + linha de
+  tendência, remetendo para crescimento/análise) + texto "Projecto
+  Carcanhol". Sem biblioteca de ícones nem asset de imagem — o símbolo é SVG
+  inline, decorativo (`aria-hidden`), e o texto visível é o único nome
+  acessível (sem duplicação de texto para leitores de ecrã).
+
+### 9.9 Requisitos de performance (aplicável desde a Fase 1, não apenas fases futuras)
+
+Regras transversais a manter em toda a UI, incluindo o que já existe (login,
+dashboard) e tudo o que for construído nas fases seguintes:
+
+- **Server Components por defeito**; usar Client Components (`"use client"`)
+  apenas onde há interação real (formulários, botões com estado, hooks). Não
+  converter uma página inteira em Client Component só porque um pequeno
+  elemento é interativo — isolar a interatividade num componente pequeno.
+- Evitar dependências/bibliotecas de UI pesadas (ex.: bibliotecas de ícones
+  completas, animação, componentes prontos) quando um elemento simples em
+  Tailwind/SVG inline resolve — cada dependência nova tem de se justificar
+  pelo valor que traz face ao peso que acrescenta ao bundle.
+- **Sem vídeos, parallax, ou transições longas.** Qualquer transição (hover,
+  estados de carregamento, abertura de menus) deve ser curta e puramente
+  funcional (ordem de ~150ms), nunca decorativa.
+- Todas as transições/animações devem respeitar
+  `prefers-reduced-motion` (em Tailwind, via o modificador
+  `motion-reduce:`), desativando-as para utilizadores que o pedem no
+  sistema operativo.
+- **Lazy loading** para gráficos e blocos de dados pesados (a introduzir nas
+  fases de dados financeiros/análise) — carregar apenas quando visíveis ou
+  pedidos, nunca no carregamento inicial da página.
+- **Paginação/virtualização** para listas potencialmente grandes (resultados
+  de pesquisa, watchlists, histórico de análises) — nunca renderizar listas
+  ilimitadas de uma vez.
+- **Estabilidade visual** (evitar layout shift): dimensões reservadas para
+  imagens/ícones/gráficos, sem conteúdo a "saltar" durante o carregamento.
+- Responsividade mobile-first mantida em todas as páginas, validada
+  mentalmente (e sempre que possível na prática) nos três perfis de ecrã de
+  referência: iPhone, iPad e desktop.
+
 ---
 
 ## 10. Notas de implementação da Fase 1 (Foundation)
