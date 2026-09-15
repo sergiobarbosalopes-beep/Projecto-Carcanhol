@@ -1,11 +1,7 @@
 import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  CopilotClient,
-  type ModelInfo,
-  type PermissionHandler,
-} from "@github/copilot-sdk";
+import { CopilotClient, type PermissionHandler } from "@github/copilot-sdk";
 import type { CopilotRuntimeClient, CopilotRuntimeFactory } from "./runtime";
 
 export const denyAllPermissions: PermissionHandler = () => ({
@@ -59,7 +55,13 @@ export const createCopilotSdkRuntime: CopilotRuntimeFactory = async (
     throw error;
   }
 
-  return new CopilotSdkRuntime(client, baseDirectory, signal, abortRuntime);
+  return new CopilotSdkRuntime(
+    client,
+    baseDirectory,
+    signal,
+    abortRuntime,
+    token
+  );
 };
 
 class CopilotSdkRuntime implements CopilotRuntimeClient {
@@ -67,11 +69,12 @@ class CopilotSdkRuntime implements CopilotRuntimeClient {
     private readonly client: CopilotClient,
     private readonly baseDirectory: string,
     private readonly signal: AbortSignal,
-    private readonly abortRuntime: () => void
+    private readonly abortRuntime: () => void,
+    private token: string
   ) {}
 
-  async listModels(signal: AbortSignal): Promise<readonly ModelInfo[]> {
-    return listModelsAuthoritatively(this.client, signal);
+  async listModels(signal: AbortSignal) {
+    return listModelsWithToken(this.client, this.token, signal);
   }
 
   async close() {
@@ -86,19 +89,21 @@ class CopilotSdkRuntime implements CopilotRuntimeClient {
     } catch {
       await forceStop(this.client);
     } finally {
+      this.token = "";
       await removeTemporaryState(this.baseDirectory);
     }
   }
 }
 
-export async function listModelsAuthoritatively(
-  client: Pick<CopilotClient, "listModels">,
+export async function listModelsWithToken(
+  client: Pick<CopilotClient, "rpc">,
+  token: string,
   signal: AbortSignal
 ) {
   signal.throwIfAborted();
-  const models = await client.listModels();
+  const result = await client.rpc.models.list({ gitHubToken: token });
   signal.throwIfAborted();
-  return models;
+  return result.models;
 }
 
 export function buildChildRuntimeEnvironment(

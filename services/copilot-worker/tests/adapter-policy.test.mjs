@@ -4,7 +4,7 @@ import test from "node:test";
 import {
   buildChildRuntimeEnvironment,
   denyAllPermissions,
-  listModelsAuthoritatively,
+  listModelsWithToken,
 } from "../dist/copilot-adapter.js";
 import {
   assertWorkerEnvironmentIsolated,
@@ -108,12 +108,15 @@ test("pins the SDK and configures empty mode without logged-in fallback", () => 
   assert.match(adapter, /useLoggedInUser: false/);
   assert.match(adapter, /logLevel: "none"/);
   assert.doesNotMatch(adapter, /getAuthStatus/);
+  assert.doesNotMatch(adapter, /client\.listModels\(\)/);
+  assert.match(adapter, /client\.rpc\.models\.list/);
   assert.doesNotMatch(adapter, /approveAll/);
 });
 
-test("uses listModels even when a stale auth status would be false", async () => {
+test("sends the exact token payload through the typed models RPC", async () => {
   let authStatusCalls = 0;
   let listModelsCalls = 0;
+  const payloads = [];
   const client = {
     async getAuthStatus() {
       authStatusCalls += 1;
@@ -123,15 +126,25 @@ test("uses listModels even when a stale auth status would be false", async () =>
       listModelsCalls += 1;
       return [{ id: "gpt-5", name: "GPT-5" }];
     },
+    rpc: {
+      models: {
+        async list(payload) {
+          payloads.push(payload);
+          return { models: [{ id: "gpt-5", name: "GPT-5" }] };
+        },
+      },
+    },
   };
 
-  const models = await listModelsAuthoritatively(
+  const models = await listModelsWithToken(
     client,
+    `github_pat_${"A".repeat(40)}`,
     new AbortController().signal
   );
 
   assert.equal(authStatusCalls, 0);
-  assert.equal(listModelsCalls, 1);
+  assert.equal(listModelsCalls, 0);
+  assert.deepEqual(payloads, [{ gitHubToken: `github_pat_${"A".repeat(40)}` }]);
   assert.equal(models[0].id, "gpt-5");
 });
 

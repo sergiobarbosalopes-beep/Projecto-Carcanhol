@@ -258,8 +258,9 @@ em `inactive`; a ativação posterior é explícita.
 
 O GitHub Models foi retirado em 30 de julho de 2026. A integração usa
 `@github/copilot-sdk@1.0.13`, cujo runtime requer Node
-`^20.19.0 || >=22.12.0`; o container fixa Node 24. `listModels()` é uma
-operação do cliente, por isso a validação não cria sessão nem envia prompt.
+`^20.19.0 || >=22.12.0`; o container fixa Node 24. A RPC pública tipada
+`client.rpc.models.list({ gitHubToken })` é uma operação do cliente, por isso a
+validação não cria sessão nem envia prompt.
 
 O onboarding manual aceita exclusivamente um fine-grained PAT `github_pat_`
 da conta pessoal, com a conta pessoal como Resource owner e a Account
@@ -273,9 +274,10 @@ O SDK Node inicia o runtime incluído como child process. Ele não é dependênc
 da app Next.js nem é importado por qualquer Route Handler. Para cada pedido, o
 worker cria um diretório temporário `0700`, inicia um cliente com
 `mode: "empty"`, `useLoggedInUser: false`, `logLevel: "none"` e ambiente
-allowlisted, chama `listModels()`, faz `stop()`/`forceStop()` e remove o
-diretório. O token é passado pela opção oficial `gitHubToken`, nunca por URL ou
-ficheiro. Como não há sessão, não há permission requests; qualquer sessão
+allowlisted, chama `rpc.models.list({ gitHubToken })`, faz
+`stop()`/`forceStop()` e remove o diretório. O token é passado apenas em
+memória, nunca por URL ou ficheiro. Como não há sessão, não há permission
+requests; qualquer sessão
 futura terá `availableTools: []` e `denyAllPermissions`.
 
 ```text
@@ -292,7 +294,7 @@ Worker/container Copilot
   ├─ body/schema estritos: request-id + token
   ├─ comparação HMAC constant-time + janela + replay store
   ├─ concorrência/fila/payload/timeout bounded
-  ├─ start → listModels → stop
+  ├─ start → rpc.models.list({ gitHubToken }) → stop
   └─ resposta allowlisted: model id/name/capabilities/policy/billing
 ```
 

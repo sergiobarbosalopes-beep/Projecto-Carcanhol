@@ -175,8 +175,9 @@ docs/architecture.md
 
 O GitHub Models foi retirado em 30 de julho de 2026 e não é usado. O SDK
 GitHub Copilot corre exclusivamente em `services/copilot-worker`, nunca numa
-Route Handler Next.js. Criar uma conta executa `start()` + `listModels()` com a
-identidade submetida antes de gerar o `accountId`, cifrar ou persistir.
+Route Handler Next.js. Criar uma conta executa `start()` +
+`rpc.models.list({ gitHubToken })` com a identidade submetida antes de gerar o
+`accountId`, cifrar ou persistir.
 
 Para o onboarding manual:
 
@@ -238,7 +239,7 @@ GitHub Copilot; BYOK é a exceção documentada pelo SDK.
   nonce, auth tag, chave e payloads sensíveis nunca são serializados.
 - Mensagens de validação identificam formatos de token incompatíveis sem
   repetir o valor submetido.
-- Quando `listModels()` termina com `unknown`, a revalidação pode devolver ao
+- Quando a listagem de modelos termina com `unknown`, a revalidação pode devolver ao
   proprietário um diagnóstico efémero, estritamente allowlisted/redigido e
   bounded. Não é persistido, listado nem mostrado por omissão na UI; para os
   restantes códigos o contrato proíbe esse campo.
