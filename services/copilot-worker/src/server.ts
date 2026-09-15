@@ -33,6 +33,7 @@ export type CopilotWorkerServerOptions = {
   maxClockSkewMs?: number;
   maxConcurrency?: number;
   maxQueue?: number;
+  healthTimeoutMs?: number;
   validationDeadlineMs?: number;
   replayStore?: ReplayStore;
 };
@@ -84,7 +85,14 @@ async function handleRequest(
     url.pathname === COPILOT_HEALTH_PATH &&
     !url.search
   ) {
-    sendJson(response, 200, { status: "ok" });
+    const ready = await options.replayStore
+      .readiness(AbortSignal.timeout(options.healthTimeoutMs ?? 1_500))
+      .catch(() => false);
+    sendJson(
+      response,
+      ready ? 200 : 503,
+      ready ? { status: "ok" } : { status: "unavailable" }
+    );
     return;
   }
 

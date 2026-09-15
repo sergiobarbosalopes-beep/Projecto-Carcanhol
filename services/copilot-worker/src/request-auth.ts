@@ -19,6 +19,7 @@ export type ReplayStore = {
     nowMs: number,
     signal?: AbortSignal
   ): Promise<boolean>;
+  readiness(signal?: AbortSignal): Promise<boolean>;
   close?(): Promise<void>;
 };
 
@@ -210,6 +211,11 @@ export class InMemoryReplayStore implements ReplayStore {
 
   async close() {
     this.requests.clear();
+  }
+
+  async readiness(signal?: AbortSignal) {
+    signal?.throwIfAborted();
+    return true;
   }
 
   private prune(nowMs: number) {

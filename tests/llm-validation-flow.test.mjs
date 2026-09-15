@@ -7,6 +7,7 @@ import {
   runBoundedAccountValidation,
 } from "../src/admin/llm-auto-validation.ts";
 import { persistOnlyAfterValidation } from "../src/admin/validated-account-creation.ts";
+import { isTransientLlmValidationError } from "../src/admin/llm-validation-guidance.ts";
 
 test("does not persist an account when real validation fails", async () => {
   let persisted = false;
@@ -33,6 +34,21 @@ test("persists only the sanitized models returned by successful validation", asy
   });
 
   assert.deepEqual(result, { ok: true, value: "created" });
+});
+
+test("distinguishes transient infrastructure failures from credential failures", () => {
+  for (const code of ["timeout", "unavailable", "unknown"]) {
+    assert.equal(isTransientLlmValidationError(code), true, code);
+  }
+
+  for (const code of [
+    "invalid_token",
+    "no_subscription",
+    "org_policy_blocked",
+    "no_models",
+  ]) {
+    assert.equal(isTransientLlmValidationError(code), false, code);
+  }
 });
 
 test("coalesces concurrent validation requests for the same account", async () => {
@@ -98,7 +114,7 @@ test("auto-validation is capped and uses low concurrency", async () => {
   assert.equal(maximumActive, 2);
 });
 
-test("migration 0005 atomically syncs models and rejects stale writes", () => {
+test("migrations atomically sync models and preserve transient catalogs", () => {
   const migration = readFileSync(
     new URL(
       "../database/migrations/0005_github_copilot_validation.sql",
@@ -115,6 +131,30 @@ test("migration 0005 atomically syncs models and rejects stale writes", () => {
     /last_validation_request_id = p_validation_request_id[\s\S]+validation_generation = p_validation_generation/
   );
   assert.match(migration, /enabled = false,[\s\S]+is_stale = true/);
+  const transientMigration = readFileSync(
+    new URL(
+      "../database/migrations/0006_preserve_transient_validation_catalog.sql",
+      import.meta.url
+    ),
+    "utf8"
+  );
+  assert.match(transientMigration, /\bbegin;[\s\S]+commit;\s*$/);
+  assert.match(
+    transientMigration,
+    /create or replace function carcanhol\.apply_llm_account_validation/
+  );
+  const definitiveFailureStart = transientMigration.search(
+    /if applied\s+and p_error_code in/
+  );
+  assert.notEqual(definitiveFailureStart, -1);
+  const definitiveFailureMutation = transientMigration.slice(
+    definitiveFailureStart,
+    transientMigration.indexOf("end if;", definitiveFailureStart)
+  );
+  assert.match(definitiveFailureMutation, /invalid_token/);
+  assert.match(definitiveFailureMutation, /no_subscription/);
+  assert.doesNotMatch(definitiveFailureMutation, /timeout/);
+  assert.doesNotMatch(definitiveFailureMutation, /unavailable/);
   assert.match(migration, /llm_accounts_require_current_models/);
   assert.match(migration, /llm_models_preserve_active_account/);
   assert.match(
@@ -142,4 +182,5 @@ test("LLM cards expose accessible manual and automatic validation states", () =>
   assert.match(panel, /A validar…/);
   assert.match(panel, /aria-busy=\{validatingIds\.has\(account\.id\)\}/);
   assert.match(panel, /aria-live="polite"/);
+  assert.match(panel, /catálogo preservado; conta indisponível/);
 });

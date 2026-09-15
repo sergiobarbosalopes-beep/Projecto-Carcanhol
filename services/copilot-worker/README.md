@@ -2,7 +2,9 @@
 
 Serviço Node.js isolado que executa apenas duas operações:
 
-- `GET /health` devolve `{"status":"ok"}` sem versão ou detalhes internos;
+- `GET /health` faz `PING` e um `SET NX PX` efémero no replay store, devolvendo
+  `200 {"status":"ok"}` ou `503 {"status":"unavailable"}` sem versão ou
+  detalhes internos;
 - `POST /v1/copilot/validate` autentica um pedido HMAC e usa
   `@github/copilot-sdk@1.0.13` para `start()` + `listModels()` + `stop()`.
 
@@ -68,4 +70,8 @@ deploy no README raiz antes de ativar o preset. O processo falha fechado no
 arranque se detetar a service role, a chave AES ou a anon key do Supabase, ou
 se produção não tiver Redis partilhado. Local/teste usam replay store em
 memória; produção usa `SET NX PX`, com TTL igual ao restante período de
-validade da assinatura.
+validade da assinatura. O cliente Redis partilha uma única tentativa de
+reconexão entre pedidos concorrentes e usa backoff exponencial limitado a cinco
+tentativas, com teto de dois segundos e jitter; qualquer falha continua
+fail-closed. Configure `/health` como readiness do orchestrator. O
+`Dockerfile.vercel` inclui um `HEALTHCHECK` equivalente.

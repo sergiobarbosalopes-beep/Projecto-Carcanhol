@@ -109,5 +109,5 @@ export type CopilotValidationResponse = z.infer<
 >;
 
 export const copilotHealthResponseSchema = z
-  .object({ status: z.literal("ok") })
+  .object({ status: z.enum(["ok", "unavailable"]) })
   .strict();

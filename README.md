@@ -81,6 +81,7 @@ database/migrations/
   0003_llm_accounts.sql
   0004_github_copilot_provider.sql
   0005_github_copilot_validation.sql
+  0006_preserve_transient_validation_catalog.sql
 docs/architecture.md
 ```
 
@@ -134,8 +135,9 @@ docs/architecture.md
    1. `database/migrations/0001_init_carcanhol_schema.sql`;
    2. `database/migrations/0002_admin_settings_and_skills.sql`;
    3. `database/migrations/0003_llm_accounts.sql`;
-   4. `database/migrations/0004_github_copilot_provider.sql`.
-   5. `database/migrations/0005_github_copilot_validation.sql`.
+   4. `database/migrations/0004_github_copilot_provider.sql`;
+   5. `database/migrations/0005_github_copilot_validation.sql`;
+   6. `database/migrations/0006_preserve_transient_validation_catalog.sql`.
 
    A segunda migration cria `carcanhol.global_assumptions`,
    `carcanhol.skills`, índices, triggers locais de `updated_at`, a proteção
@@ -147,7 +149,9 @@ docs/architecture.md
    GitHub Copilot, migra as contas existentes e preserva o provider usado no
    AAD dos envelopes AES-256-GCM já cifrados. A quinta introduz os estados de
    validação real, geração anti-stale, catálogo stale e RPCs service-only
-   atómicas para conta+segredo+modelos e para revalidação.
+   atómicas para conta+segredo+modelos e para revalidação. A sexta preserva o
+   último catálogo e escolhas manuais em falhas transitórias de infraestrutura,
+   mantendo a conta bloqueada em `error`.
 
 4. Em **Project Settings → API → Exposed schemas**, adicionar `carcanhol`.
 
@@ -236,13 +240,16 @@ GitHub Copilot; BYOK é a exceção documentada pelo SDK.
   repetir o valor submetido.
 - BFF e worker autenticam cada pedido com HMAC SHA-256 sobre método, path,
   timestamp, request-id e hash do body; o worker usa comparação constant-time,
-  janela temporal e cache bounded contra replay.
+  janela temporal e Redis partilhado com claim atómico contra replay.
 - O worker recebe apenas token e request-id, limita body/concurrency/timeout,
   rejeita CORS e prompts/tools, usa `mode: "empty"` e remove o diretório
   temporário depois de cada validação.
-- Falhar uma revalidação muda imediatamente a conta para `invalid`/`error` e
-  marca modelos anteriores como stale e desativados. Uma resposta antiga não
-  vence uma mais recente porque a RPC compara request-id + generation.
+- Falhas definitivas de credencial/entitlement/política/modelos mudam a conta
+  para `invalid` e marcam o catálogo anterior stale/desativado. Falhas
+  transitórias de worker/Redis mudam a conta para `error`, bloqueiam execução,
+  mas preservam explicitamente o último catálogo e escolhas `enabled` para
+  recuperação. Uma resposta antiga não vence uma mais recente porque a RPC
+  compara request-id + generation.
 
 ### Rotação da chave mestra LLM
 
@@ -279,7 +286,9 @@ isolamento:
 3. configurar o mesmo HMAC no BFF e worker via secret manager;
 4. configurar `COPILOT_REPLAY_REDIS_URL` para proteção de replay atómica entre
    réplicas;
-5. só então copiar o template para `vercel.json` e redeployar.
+5. configurar o orchestrator/load balancer para usar `GET /health` como
+   readiness (devolve `503` quando Redis não está operacional);
+6. só então copiar o template para `vercel.json` e redeployar.
 
 Se o ambiente/plano não permitir variáveis isoladas por serviço, deployar o
 worker como projeto/container separado com apenas HTTPS, HMAC, Redis e as

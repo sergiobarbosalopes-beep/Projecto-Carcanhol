@@ -28,6 +28,7 @@ test("serves health without details and validates only authenticated strict requ
       ],
     }),
   });
+
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
 
@@ -83,6 +84,51 @@ test("serves health without details and validates only authenticated strict requ
       browserRequest.headers.has("access-control-allow-origin"),
       false
     );
+  } finally {
+    server.close();
+    await once(server, "close");
+  }
+});
+
+test("health is readiness-aware and recovers with the replay store", async () => {
+  let ready = false;
+  const server = createCopilotWorkerServer({
+    hmacSecret: secret,
+    replayStore: {
+      async consume() {
+        return true;
+      },
+      async readiness() {
+        if (!ready) {
+          throw new Error("redis unavailable");
+        }
+
+        return ready;
+      },
+    },
+    validate: async ({ requestId }) => ({
+      ok: false,
+      requestId,
+      code: "unknown",
+    }),
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+
+  try {
+    const address = server.address();
+    assert.equal(typeof address, "object");
+    const healthUrl = `http://127.0.0.1:${address.port}${COPILOT_HEALTH_PATH}`;
+    const unhealthy = await fetch(healthUrl);
+
+    assert.equal(unhealthy.status, 503);
+    assert.deepEqual(await unhealthy.json(), { status: "unavailable" });
+
+    ready = true;
+    const healthy = await fetch(healthUrl);
+
+    assert.equal(healthy.status, 200);
+    assert.deepEqual(await healthy.json(), { status: "ok" });
   } finally {
     server.close();
     await once(server, "close");

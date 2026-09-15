@@ -14,7 +14,10 @@ import {
   getLlmCredentialError,
   isManuallyManagedLlmCredentialType,
 } from "@/src/admin/llm-validation";
-import { getLlmValidationGuidance } from "@/src/admin/llm-validation-guidance";
+import {
+  getLlmValidationGuidance,
+  isTransientLlmValidationError,
+} from "@/src/admin/llm-validation-guidance";
 import type {
   LlmAccountPublic,
   LlmAccountStatus,
@@ -452,6 +455,16 @@ function AccountCard({
   const currentModelCount = account.models.filter(
     (model) => !model.is_stale
   ).length;
+  const transientFailure =
+    account.status === "error" &&
+    isTransientLlmValidationError(account.last_validation_error_code);
+  const lastCatalogAt = account.models.reduce<string | null>(
+    (latest, model) =>
+      !latest || new Date(model.last_seen_at) > new Date(latest)
+        ? model.last_seen_at
+        : latest,
+    null
+  );
 
   return (
     <>
@@ -493,10 +506,17 @@ function AccountCard({
         </Metadata>
         <Metadata label="Modelos encontrados">
           {currentModelCount.toLocaleString("pt-PT")}
-          {account.models.some((model) => model.is_stale)
-            ? ` (${account.models.length.toLocaleString("pt-PT")} no último catálogo)`
-            : ""}
+          {transientFailure && currentModelCount > 0
+            ? " (catálogo preservado; conta indisponível)"
+            : account.models.some((model) => model.is_stale)
+              ? ` (${account.models.length.toLocaleString("pt-PT")} no último catálogo)`
+              : ""}
         </Metadata>
+        {lastCatalogAt && (
+          <Metadata label="Último catálogo válido" wide>
+            {formatDate(lastCatalogAt)}
+          </Metadata>
+        )}
       </dl>
 
       {validationGuidance && (
@@ -538,9 +558,13 @@ function AccountCard({
                 <span className="shrink-0 text-xs font-semibold text-slate-500">
                   {model.is_stale
                     ? "Catálogo anterior"
-                    : model.enabled
-                      ? "Autorizado"
-                      : "A aguardar autorização"}
+                    : transientFailure
+                      ? model.enabled
+                        ? "Seleção preservada; conta indisponível"
+                        : "Catálogo preservado; não autorizado"
+                      : model.enabled
+                        ? "Autorizado"
+                        : "A aguardar autorização"}
                 </span>
               </li>
             ))}

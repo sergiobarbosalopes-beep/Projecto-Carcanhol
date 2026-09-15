@@ -8,9 +8,11 @@ worker. A cobertura inclui:
 - criação bloqueada quando a validação real falha;
 - concorrência bounded e coalescimento da auto-validação;
 - HMAC, timestamp, body hash, comparação constant-time e replay;
+- Redis com claim atómico, reconexão bounded e readiness unhealthy/recovery;
 - schema estrito/CORS fechado e ausência do PAT nas respostas;
 - sanitização de modelos, policy, timeout e error mapping;
-- invariantes da migration 0005 para transação, sync/stale e stale writes.
+- invariantes da migration 0005 para transação, sync/stale, stale writes e
+  preservação do catálogo em falhas transitórias.
 
 O adapter do SDK é substituído por mocks em CI. O teste real é deliberadamente
 separado e requer `COPILOT_REAL_TEST_TOKEN`:

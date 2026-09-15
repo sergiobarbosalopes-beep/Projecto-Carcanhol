@@ -51,3 +51,12 @@ export function getLlmValidationGuidance(
 
   return LLM_VALIDATION_GUIDANCE[code as LlmValidationErrorCode];
 }
+
+export function isTransientLlmValidationError(code: string | null) {
+  return [
+    "timeout",
+    "unavailable",
+    "unknown",
+    "provider_validation_unavailable",
+  ].includes(code ?? "");
+}

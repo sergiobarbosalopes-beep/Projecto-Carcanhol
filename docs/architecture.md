@@ -114,7 +114,8 @@ As migrations são aplicadas por ordem e são reexecutáveis:
 2. `0002_admin_settings_and_skills.sql`;
 3. `0003_llm_accounts.sql`;
 4. `0004_github_copilot_provider.sql`;
-5. `0005_github_copilot_validation.sql`.
+5. `0005_github_copilot_validation.sql`;
+6. `0006_preserve_transient_validation_catalog.sql`.
 
 Nenhuma migration cria objetos de aplicação em `public`.
 
@@ -212,8 +213,10 @@ compatível com GitHub Copilot.
 
 - `llm_account_models`: catálogo sincronizado por `provider_model_id`; cada
   modelo novo começa `enabled = false`, metadata é allowlisted/bounded e
-  modelos ausentes ou de uma conta que falhou ficam `is_stale = true` e
-  desativados;
+  modelos ausentes ou invalidados por uma falha definitiva ficam
+  `is_stale = true` e desativados. Timeout/indisponibilidade/erro desconhecido
+  bloqueiam a conta com `status = error`, mas preservam catálogo e escolhas do
+  último sucesso;
 - `llm_routing_rules`: modelo geral ou por funcionalidade, onde ordem 0 é o
   principal e as restantes rows são fallbacks ordenados;
 - `llm_usage_events`: tokens de entrada/saída, latência, estado e custo
@@ -222,6 +225,9 @@ compatível com GitHub Copilot.
 As três tabelas são metadata user-owned com RLS ownership + membership.
 Authenticated tem apenas leitura. Descoberta é aplicada pelas RPCs
 service-only; autorização, routing e telemetria ainda não têm handlers.
+Qualquer runtime futuro terá de exigir simultaneamente conta `active`, modelo
+`enabled` e `is_stale = false`; uma conta `error` nunca é elegível mesmo quando
+o catálogo/seleção anterior foi preservado.
 
 ## 6. Lifecycle de Skills
 
@@ -296,10 +302,14 @@ Estados específicos só são inferidos de evidência estruturada; um `403`
 genérico fica `unknown`. Mensagens remotas nunca são persistidas/devolvidas.
 
 O worker expõe apenas `GET /health` e `POST /v1/copilot/validate`, rejeita
-`Origin` e não envia headers CORS. O health não revela versão. Local/teste
-podem usar replay store em memória; produção exige Redis partilhado e reclama
-cada request-id atomicamente com `SET NX PX` até terminar a validade da
-assinatura.
+`Origin` e não envia headers CORS. `/health` é readiness: faz `PING` e um
+`SET NX PX` efémero e bounded, devolvendo `503` sem detalhes quando Redis não
+está operacional ou não permite a escrita exigida. O cliente Redis partilha
+tentativas concorrentes, usa reconexão exponencial limitada
+(cinco tentativas, teto de dois segundos e jitter) e continua fail-closed.
+Local/teste podem usar replay store em memória; produção exige Redis
+partilhado e reclama cada request-id atomicamente com `SET NX PX` até terminar
+a validade da assinatura.
 
 OAuth ou GitHub App user-to-server é o desenho recomendado para a futura
 versão web multiutilizador, evitando a recolha manual permanente de PATs. Um
@@ -392,7 +402,9 @@ ações fora do repositório:
    `LLM_CREDENTIAL_ENCRYPTION_KEY`;
 3. provisionar o segredo HMAC independente nos dois serviços;
 4. provisionar Redis dedicado para nonces, sem dados de utilizador;
-5. aceitar explicitamente o risco operacional de uma funcionalidade beta.
+5. configurar `GET /health` como readiness para remover instâncias sem Redis
+   do tráfego; o `Dockerfile.vercel` inclui também um `HEALTHCHECK`;
+6. aceitar explicitamente o risco operacional de uma funcionalidade beta.
 
 Se não houver isolamento de secrets por serviço, o worker deve ser publicado
 num projeto/container separado, com apenas as variáveis do respetivo

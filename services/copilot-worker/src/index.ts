@@ -12,6 +12,7 @@ const server = createCopilotWorkerServer({
   maxClockSkewMs: config.COPILOT_WORKER_CLOCK_SKEW_MS,
   maxConcurrency: config.COPILOT_WORKER_MAX_CONCURRENCY,
   maxQueue: config.COPILOT_WORKER_MAX_QUEUE,
+  healthTimeoutMs: config.COPILOT_REPLAY_STORE_TIMEOUT_MS,
   validationDeadlineMs: config.COPILOT_VALIDATION_TIMEOUT_MS,
   replayStore,
   validate: async ({ requestId, token }, signal) => {
