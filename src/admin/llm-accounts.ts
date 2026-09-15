@@ -3,6 +3,10 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { AuthorizationError, requireAuthorizedUser } from "@/src/auth/server";
 import {
+  getLlmCredentialError,
+  isManuallyManagedLlmCredentialType,
+} from "@/src/admin/llm-validation";
+import {
   createClient,
   createServiceRoleClient,
   type CarcanholClient,
@@ -20,9 +24,9 @@ const PUBLIC_ACCOUNT_COLUMNS =
 
 const CREDENTIAL_TYPE_BY_PROVIDER: Record<
   LlmProvider,
-  Exclude<LlmCredentialType, "oauth">
+  Extract<LlmCredentialType, "fine_grained_pat" | "api_key">
 > = {
-  github_models: "token",
+  github_copilot: "fine_grained_pat",
   anthropic: "api_key",
   google_gemini: "api_key",
   deepseek: "api_key",
@@ -65,6 +69,15 @@ export async function createLlmAccount(
   input: CreateLlmAccountInput
 ): Promise<LlmAccountPublic> {
   await createAuthorizedClient(userId);
+  const credentialError = getLlmCredentialError(
+    input.provider,
+    input.credential
+  );
+
+  if (credentialError) {
+    throw new LlmCredentialValidationError(credentialError);
+  }
+
   const accountId = randomUUID();
   const encrypted = encryptCredentialForStorage(input.credential, {
     userId,
@@ -178,6 +191,18 @@ export async function replaceLlmCredential(
 
   if (!current) {
     return null;
+  }
+
+  if (!isManuallyManagedLlmCredentialType(current.credential_type)) {
+    throw new LlmCredentialValidationError(
+      "Esta credencial é gerida pela integração e não pode ser substituída manualmente."
+    );
+  }
+
+  const credentialError = getLlmCredentialError(current.provider, credential);
+
+  if (credentialError) {
+    throw new LlmCredentialValidationError(credentialError);
   }
 
   const encrypted = encryptCredentialForStorage(credential, {
@@ -323,3 +348,4 @@ function toPublicAccount(account: LlmAccount): LlmAccountPublic {
 
 export class LlmAccountConflictError extends Error {}
 export class LlmAccountLifecycleError extends Error {}
+export class LlmCredentialValidationError extends Error {}

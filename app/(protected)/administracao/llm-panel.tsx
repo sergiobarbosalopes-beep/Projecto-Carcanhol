@@ -6,6 +6,8 @@ import {
   LLM_CREDENTIAL_MAX_LENGTH,
   LLM_CUSTOM_ENDPOINT_MAX_LENGTH,
   LLM_PROVIDERS,
+  getLlmCredentialError,
+  isManuallyManagedLlmCredentialType,
 } from "@/src/admin/llm-validation";
 import type {
   LlmAccountPublic,
@@ -18,10 +20,10 @@ const PROVIDER_DETAILS: Record<
   LlmProvider,
   { label: string; shortLabel: string; credentialLabel: string }
 > = {
-  github_models: {
-    label: "GitHub Models",
+  github_copilot: {
+    label: "GitHub Copilot",
     shortLabel: "GH",
-    credentialLabel: "Token dedicado",
+    credentialLabel: "Fine-grained PAT",
   },
   anthropic: {
     label: "Anthropic",
@@ -51,9 +53,12 @@ const STATUS_LABELS: Record<LlmAccountStatus, string> = {
 };
 
 const CREDENTIAL_TYPE_LABELS: Record<LlmCredentialType, string> = {
-  token: "Token",
+  fine_grained_pat: "Fine-grained PAT",
+  oauth_app_user: "OAuth user token",
+  github_app_user: "GitHub App user token",
   api_key: "API key",
-  oauth: "OAuth",
+  token: "Token legado",
+  oauth: "OAuth legado",
 };
 
 type AccountActionType = "edit" | "credential" | "delete";
@@ -181,8 +186,9 @@ export function LlmPanel({
               Ainda não existem contas
             </h4>
             <p className="mx-auto mt-2 max-w-lg text-sm leading-6 text-slate-600">
-              Adicione uma conta por token ou API key. Pode configurar várias
-              contas do mesmo fornecedor, desde que tenham nomes diferentes.
+              Adicione uma conta por fine-grained PAT ou API key. Pode
+              configurar várias contas do mesmo fornecedor, desde que tenham
+              nomes diferentes.
             </p>
           </div>
         ) : (
@@ -337,14 +343,16 @@ function AccountCard({
         >
           Editar
         </ActionButton>
-        <ActionButton
-          active={action === "credential"}
-          disabled={busy}
-          controls={`llm-account-${account.id}-credential`}
-          onClick={() => onAction("credential")}
-        >
-          Substituir credencial
-        </ActionButton>
+        {isManuallyManagedLlmCredentialType(account.credential_type) && (
+          <ActionButton
+            active={action === "credential"}
+            disabled={busy}
+            controls={`llm-account-${account.id}-credential`}
+            onClick={() => onAction("credential")}
+          >
+            Substituir credencial
+          </ActionButton>
+        )}
         <button
           type="button"
           aria-expanded={action === "delete"}
@@ -368,7 +376,7 @@ function CreateAccountForm({
   onCreated: () => Promise<void>;
 }) {
   const formId = useId();
-  const [provider, setProvider] = useState<LlmProvider>("github_models");
+  const [provider, setProvider] = useState<LlmProvider>("github_copilot");
   const [displayName, setDisplayName] = useState("");
   const [credential, setCredential] = useState("");
   const [customEndpoint, setCustomEndpoint] = useState("");
@@ -377,8 +385,15 @@ function CreateAccountForm({
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setPending(true);
     setFeedback(null);
+    const credentialError = getLlmCredentialError(provider, credential);
+
+    if (credentialError) {
+      setFeedback({ kind: "error", message: credentialError });
+      return;
+    }
+
+    setPending(true);
     const result = await requestJson<{ account: LlmAccountPublic }>(
       "/api/admin/llm-accounts",
       {
@@ -440,7 +455,7 @@ function CreateAccountForm({
           value={displayName}
           onChange={(event) => setDisplayName(event.target.value)}
           className={INPUT_CLASS}
-          placeholder="Ex.: GitHub Models pessoal"
+          placeholder="Ex.: GitHub Copilot pessoal"
         />
       </FormField>
       <FormField
@@ -460,11 +475,14 @@ function CreateAccountForm({
           className={INPUT_CLASS}
         />
       </FormField>
-      {provider === "github_models" && (
+      {provider === "github_copilot" && (
         <p className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm leading-6 text-blue-950">
-          O GitHub Copilot não fornece diretamente credenciais a esta aplicação.
-          Numa fase futura deverá usar um token dedicado ao GitHub Models, com o
-          menor conjunto de permissões necessário.
+          Use um fine-grained PAT <code>github_pat_</code>, criado na sua conta
+          pessoal com a Account permission <strong>Copilot Requests</strong>.
+          Não use a password, um token Vercel, um token GitHub Models nem um
+          token classic <code>ghp_</code>. A permissão não pode ser confirmada
+          localmente; a validação real será futura. OAuth será preferível numa
+          versão web multiutilizador.
         </p>
       )}
       {provider === "openai_compatible" && (
@@ -527,8 +545,8 @@ function EditAccountForm({
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setPending(true);
     setFeedback(null);
+    setPending(true);
     const result = await requestJson<{ account: LlmAccountPublic }>(
       `/api/admin/llm-accounts/${account.id}`,
       {
@@ -608,8 +626,15 @@ function ReplaceCredentialForm({
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setPending(true);
     setFeedback(null);
+    const credentialError = getLlmCredentialError(account.provider, credential);
+
+    if (credentialError) {
+      setFeedback({ kind: "error", message: credentialError });
+      return;
+    }
+
+    setPending(true);
     const result = await requestJson<{ account: LlmAccountPublic }>(
       `/api/admin/llm-accounts/${account.id}/credential`,
       {
@@ -656,6 +681,12 @@ function ReplaceCredentialForm({
           className={INPUT_CLASS}
         />
       </FormField>
+      {account.provider === "github_copilot" && (
+        <p className="text-xs leading-5 text-slate-500">
+          Introduza apenas um novo fine-grained PAT <code>github_pat_</code>.
+          Tokens classic, OAuth e GitHub App não são aceites neste formulário.
+        </p>
+      )}
       <FeedbackMessage feedback={feedback} />
       <FormActions
         pending={pending}
