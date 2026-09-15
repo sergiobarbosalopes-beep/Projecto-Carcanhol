@@ -1,8 +1,22 @@
 # Tests
 
-`npm test` usa o test runner nativo do Node.js, sem dependências adicionais.
-A suite atual cobre parsing estrito da chave de 32 bytes, round-trip e
-autenticação de contexto AES-256-GCM, rejeição de envelopes adulterados e os
-schemas de credenciais/endpoints das contas LLM.
+`npm test` usa o test runner nativo do Node.js e executa também a suite do
+worker. A cobertura inclui:
 
-Lint, type-check e build continuam a ser executados separadamente no CI.
+- parsing e autenticação de contexto AES-256-GCM;
+- schemas de credenciais/endpoints;
+- criação bloqueada quando a validação real falha;
+- concorrência bounded e coalescimento da auto-validação;
+- HMAC, timestamp, body hash, comparação constant-time e replay;
+- schema estrito/CORS fechado e ausência do PAT nas respostas;
+- sanitização de modelos, policy, timeout e error mapping;
+- invariantes da migration 0005 para transação, sync/stale e stale writes.
+
+O adapter do SDK é substituído por mocks em CI. O teste real é deliberadamente
+separado e requer `COPILOT_REAL_TEST_TOKEN`:
+
+```bash
+npm run test:real --prefix services/copilot-worker
+```
+
+Lint, type-check, builds Next/worker e container continuam separados no CI.

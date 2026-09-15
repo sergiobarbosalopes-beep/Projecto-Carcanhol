@@ -1,0 +1,30 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "services": {
+    "web": {
+      "root": "./",
+      "framework": "nextjs",
+      "bindings": [
+        {
+          "type": "service",
+          "service": "copilot_worker",
+          "format": "url",
+          "env": "COPILOT_WORKER_URL"
+        }
+      ]
+    },
+    "copilot_worker": {
+      "root": "services/copilot-worker/",
+      "runtime": "container",
+      "entrypoint": "Dockerfile.vercel"
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": {
+        "service": "web"
+      }
+    }
+  ]
+}

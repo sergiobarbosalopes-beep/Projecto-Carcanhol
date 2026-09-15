@@ -4,12 +4,12 @@ Aplicação Next.js de apoio à decisão de investimento, preparada para combina
 dados financeiros reais com análise assistida por IA. A arquitetura completa
 está em [`docs/architecture.md`](docs/architecture.md).
 
-**Estado atual: Fase 3A — contas de fornecedores LLM.** A aplicação já inclui
+**Estado atual: Fase 3B — validação real do GitHub Copilot.** A aplicação inclui
 autenticação server-side, navegação protegida, gestão de conta, premissas
 globais, Skills manuais e configuração segura de várias contas LLM por
-utilizador. Pesquisa, Chat e Análises têm páginas protegidas com um estado
-vazio explícito; não existem chamadas a fornecedores, geração LLM nem dados
-financeiros.
+utilizador. Contas GitHub Copilot são autenticadas num worker isolado antes de
+serem persistidas e o respetivo catálogo de modelos é sincronizado. Pesquisa,
+Chat e Análises continuam sem geração LLM nem dados financeiros.
 
 ## Stack
 
@@ -28,9 +28,9 @@ triggers globais em `auth.users` e não concedem membership automaticamente.
   ecrãs de telemóvel/tablet;
 - navegação para Início, Pesquisa, Chat, Análises e Administração;
 - administração numa página com tabs responsivas:
-  - **LLM:** várias contas de GitHub Copilot, Anthropic, Google Gemini,
-    DeepSeek e fornecedores OpenAI-compatible/custom; criação, edição,
-    substituição irreversível de credencial e eliminação confirmada;
+  - **LLM:** validação real, revalidação manual/automática e descoberta de
+    modelos para GitHub Copilot; os restantes adapters continuam preparados
+    mas não podem ser ativados sem validação real;
   - **Skills:** pesquisa paginada, criação manual, consulta, edição,
     duplicação, ativação, desativação, arquivo, restauro e eliminação
     definitiva reforçada;
@@ -63,7 +63,9 @@ app/
     account/password/          Alteração de palavra-passe
     admin/premises/            Premissas globais
     admin/skills/              CRUD e lifecycle de Skills
-    admin/llm-accounts/        Metadados e rotação de credenciais LLM
+    admin/llm-accounts/        Criação/revalidação e rotação de contas LLM
+services/
+  copilot-worker/              Runtime SDK isolado, HTTP/HMAC e container
 src/
   admin/                       Validação e repositórios server-only
   auth/                        Sessão e membership explícita
@@ -78,6 +80,7 @@ database/migrations/
   0002_admin_settings_and_skills.sql
   0003_llm_accounts.sql
   0004_github_copilot_provider.sql
+  0005_github_copilot_validation.sql
 docs/architecture.md
 ```
 
@@ -85,7 +88,7 @@ docs/architecture.md
 
 ### Pré-requisitos
 
-- Node.js 22 ou superior;
+- Node.js 22.12–24.x (o container usa Node 24);
 - npm;
 - projeto Supabase.
 
@@ -95,6 +98,7 @@ docs/architecture.md
 
    ```bash
    npm ci
+   npm ci --prefix services/copilot-worker
    ```
 
 2. Copiar `.env.example` para `.env` e preencher:
@@ -106,11 +110,14 @@ docs/architecture.md
    SUPABASE_SCHEMA=carcanhol
    LLM_CREDENTIAL_ENCRYPTION_KEY=base64-for-exactly-32-random-bytes
    LLM_CREDENTIAL_ENCRYPTION_KEY_VERSION=1
+   COPILOT_WORKER_URL=https://copilot-worker.internal.example
+   COPILOT_WORKER_HMAC_SECRET=base64-for-32-to-64-random-bytes
+   COPILOT_WORKER_TIMEOUT_MS=30000
    ```
 
-   `NEXT_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` e
-   `LLM_CREDENTIAL_ENCRYPTION_KEY` são server-only e nunca devem receber o
-   prefixo `NEXT_PUBLIC_`.
+   `NEXT_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`,
+   `LLM_CREDENTIAL_ENCRYPTION_KEY` e `COPILOT_WORKER_HMAC_SECRET` são
+   server-only e nunca devem receber o prefixo `NEXT_PUBLIC_`.
 
    Gere uma chave independente por ambiente e guarde-a apenas no secret
    manager do runtime:
@@ -119,8 +126,8 @@ docs/architecture.md
    node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"
    ```
 
-   O valor tem de ser base64 canónico de exatamente 32 bytes. Não reutilize a
-   service role, uma password ou uma chave de outro ambiente.
+   Use este comando separadamente para a chave AES e para o segredo HMAC. Não
+   reutilize a service role, uma password ou uma chave de outro ambiente.
 
 3. No SQL Editor do Supabase, aplicar as migrations por ordem:
 
@@ -128,6 +135,7 @@ docs/architecture.md
    2. `database/migrations/0002_admin_settings_and_skills.sql`;
    3. `database/migrations/0003_llm_accounts.sql`;
    4. `database/migrations/0004_github_copilot_provider.sql`.
+   5. `database/migrations/0005_github_copilot_validation.sql`.
 
    A segunda migration cria `carcanhol.global_assumptions`,
    `carcanhol.skills`, índices, triggers locais de `updated_at`, a proteção
@@ -137,7 +145,9 @@ docs/architecture.md
    cifrados e estruturas futuras para modelos descobertos, routing e eventos
    de utilização. A quarta substitui o fornecedor retirado GitHub Models por
    GitHub Copilot, migra as contas existentes e preserva o provider usado no
-   AAD dos envelopes AES-256-GCM já cifrados.
+   AAD dos envelopes AES-256-GCM já cifrados. A quinta introduz os estados de
+   validação real, geração anti-stale, catálogo stale e RPCs service-only
+   atómicas para conta+segredo+modelos e para revalidação.
 
 4. Em **Project Settings → API → Exposed schemas**, adicionar `carcanhol`.
 
@@ -157,12 +167,12 @@ docs/architecture.md
    npm run dev
    ```
 
-### Credencial manual do GitHub Copilot
+### Credencial e validação do GitHub Copilot
 
-O GitHub Models foi retirado em 30 de julho de 2026 e já não é uma opção
-ativa. Esta fase apenas guarda a credencial para a futura integração com o
-GitHub Copilot SDK; não instala o SDK, não valida permissões e não faz chamadas
-a LLM.
+O GitHub Models foi retirado em 30 de julho de 2026 e não é usado. O SDK
+GitHub Copilot corre exclusivamente em `services/copilot-worker`, nunca numa
+Route Handler Next.js. Criar uma conta executa `start()` + `listModels()` com a
+identidade submetida antes de gerar o `accountId`, cifrar ou persistir.
 
 Para o onboarding manual:
 
@@ -172,12 +182,13 @@ Para o onboarding manual:
 3. conceder a Account permission **Copilot Requests**;
 4. definir um prazo curto e guardar o token quando for apresentado, porque só
    fica visível uma vez;
-5. introduzir em **Administração → LLM** o token com prefixo `github_pat_`.
+5. introduzir em **Administração → LLM** o token com prefixo `github_pat_`;
+6. aguardar por **Ativa**, que exige validação real e pelo menos um modelo.
 
 O valor não é a password, um token Vercel, um token GitHub Models nem um PAT
-classic `ghp_`. A aplicação valida apenas o formato sem expor o segredo; não
-consegue inspecionar localmente a permissão `Copilot Requests`. A validação
-real fica para a integração futura.
+classic `ghp_`. Falhas de autenticação, entitlement, política, timeout e
+catálogo vazio são convertidas em códigos/mensagens locais; respostas remotas
+cruas nunca são devolvidas nem persistidas.
 
 O SDK também suporta tokens de utilizador OAuth `gho_` e GitHub App `ghu_`,
 mas estes tipos estão apenas preparados no schema e são rejeitados pelo
@@ -194,7 +205,9 @@ GitHub Copilot; BYOK é a exceção documentada pelo SDK.
 | `npm run start`        | Executa o build             |
 | `npm test`             | Testes focados de segurança |
 | `npm run lint`         | ESLint                      |
-| `npm run type-check`   | TypeScript sem emissão      |
+| `npm run type-check`   | TypeScript da app e worker  |
+| `npm run worker:build` | Build do worker isolado     |
+| `npm run worker:test`  | Testes mock do worker       |
 | `npm run format`       | Formatação Prettier         |
 | `npm run format:check` | Verificação de formatação   |
 
@@ -221,6 +234,15 @@ GitHub Copilot; BYOK é a exceção documentada pelo SDK.
   nonce, auth tag, chave e payloads sensíveis nunca são serializados.
 - Mensagens de validação identificam formatos de token incompatíveis sem
   repetir o valor submetido.
+- BFF e worker autenticam cada pedido com HMAC SHA-256 sobre método, path,
+  timestamp, request-id e hash do body; o worker usa comparação constant-time,
+  janela temporal e cache bounded contra replay.
+- O worker recebe apenas token e request-id, limita body/concurrency/timeout,
+  rejeita CORS e prompts/tools, usa `mode: "empty"` e remove o diretório
+  temporário depois de cada validação.
+- Falhar uma revalidação muda imediatamente a conta para `invalid`/`error` e
+  marca modelos anteriores como stale e desativados. Uma resposta antiga não
+  vence uma mais recente porque a RPC compara request-id + generation.
 
 ### Rotação da chave mestra LLM
 
@@ -237,27 +259,42 @@ fragmento. Antes de qualquer chamada externa futura será ainda obrigatório
 resolver e validar DNS/IP em cada pedido, bloquear redes privadas/loopback,
 controlar redirects e aplicar timeouts e limites de resposta contra SSRF.
 
-## Deploy
+## Deploy do worker
 
-A integração Vercel usa as seis variáveis acima. O CI em
-`.github/workflows/ci.yml` executa instalação reprodutível, lint, type-check e
-testes/build com valores placeholder, sem acesso a credenciais reais.
+O worker está em `services/copilot-worker`, fixa
+`@github/copilot-sdk@1.0.13` e Node 24 no `Dockerfile.vercel`. O CI instala o
+lockfile separado, testa/builda o worker e constrói a imagem. A aplicação
+Next.js não depende do pacote SDK nem o inclui nas Functions.
 
-O futuro runtime do Copilot SDK não será instalado nem executado nas Vercel
-Functions do Next.js. O SDK Node gere um processo nativo/CLI pesado e estado
-em disco, incompatíveis com o ciclo de vida efémero e os limites de uma
-Function. A arquitetura prevista usa um worker/container headless separado,
-sessões com `mode: "empty"`, token isolado por sessão e apenas tools
-explicitamente autorizadas. O BFF Next.js autenticará o utilizador e comunicará
-com esse worker; esta fase não cria ainda o serviço, Dockerfile ou chamadas ao
-SDK.
+Vercel Services e custom containers estão em **beta**. O ficheiro
+`deploy/vercel.services.example.json` documenta a topologia recomendada:
+`web` recebe todo o tráfego público e obtém `COPILOT_WORKER_URL` por service
+binding; `copilot_worker` não tem rewrite público. Não foi ativado como
+`vercel.json`, porque são necessários passos externos e uma decisão de
+isolamento:
+
+1. mudar o Framework Preset do projeto para **Services**;
+2. confirmar que o worker recebe apenas o segredo HMAC e settings próprios,
+   sem service role Supabase nem chave AES;
+3. configurar o mesmo HMAC no BFF e worker via secret manager;
+4. configurar `COPILOT_REPLAY_REDIS_URL` para proteção de replay atómica entre
+   réplicas;
+5. só então copiar o template para `vercel.json` e redeployar.
+
+Se o ambiente/plano não permitir variáveis isoladas por serviço, deployar o
+worker como projeto/container separado com apenas HTTPS, HMAC, Redis e as
+variáveis de `services/copilot-worker/.env.example`; apontar o BFF para essa
+origem exata. O worker recusa arrancar em produção sem o store partilhado.
 
 ### Fontes oficiais
 
 - [Retirada do GitHub Models](https://docs.github.com/en/github-models);
 - [Autenticação do GitHub Copilot SDK](https://docs.github.com/en/copilot/how-tos/copilot-sdk/auth/authenticate);
 - [Criação do fine-grained PAT para Copilot](https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli);
-- [GitHub Copilot SDK e requisitos de subscrição/BYOK](https://github.com/github/copilot-sdk);
+- [GitHub Copilot SDK v1.0.13](https://github.com/github/copilot-sdk/tree/v1.0.13);
+- [Vercel Services](https://vercel.com/kb/guide/vercel-services);
+- [Vercel service bindings](https://vercel.com/docs/services/bindings);
+- [Vercel container images](https://vercel.com/docs/functions/container-images);
 - [Backend services](https://docs.github.com/en/copilot/how-tos/copilot-sdk/setup/backend-services)
   e
   [multi-tenancy](https://docs.github.com/en/copilot/how-tos/copilot-sdk/setup/multi-tenancy).
