@@ -1,0 +1,349 @@
+import {
+  COPILOT_WORKER_MAX_MODELS,
+  copilotModelSchema,
+  type CopilotModel,
+  type CopilotValidationErrorCode,
+  type CopilotValidationResponse,
+} from "./contract";
+
+export type CopilotRuntimeClient = {
+  listModels(signal: AbortSignal): Promise<readonly unknown[]>;
+  close(): Promise<void>;
+};
+
+export type CopilotRuntimeFactory = (
+  token: string,
+  requestId: string,
+  signal: AbortSignal
+) => Promise<CopilotRuntimeClient>;
+
+export async function validateCopilotCredential({
+  token,
+  requestId,
+  timeoutMs,
+  createRuntime,
+  signal,
+}: {
+  token: string;
+  requestId: string;
+  timeoutMs: number;
+  createRuntime: CopilotRuntimeFactory;
+  signal?: AbortSignal;
+}): Promise<CopilotValidationResponse> {
+  const controller = new AbortController();
+  let runtime: CopilotRuntimeClient | null = null;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const abortForCaller = () => controller.abort();
+  signal?.addEventListener("abort", abortForCaller, { once: true });
+
+  if (signal?.aborted) {
+    controller.abort();
+  }
+
+  try {
+    const timedOut = new Promise<never>((_, reject) => {
+      if (controller.signal.aborted) {
+        reject(new ValidationTimeoutError());
+        return;
+      }
+
+      controller.signal.addEventListener(
+        "abort",
+        () => reject(new ValidationTimeoutError()),
+        { once: true }
+      );
+      timeout = setTimeout(() => {
+        controller.abort();
+      }, timeoutMs);
+      timeout.unref?.();
+    });
+    const runtimePromise = createRuntime(token, requestId, controller.signal);
+    void runtimePromise.then(
+      async (createdRuntime) => {
+        if (controller.signal.aborted && runtime !== createdRuntime) {
+          await closeRuntime(createdRuntime);
+        }
+      },
+      () => undefined
+    );
+
+    runtime = await Promise.race([runtimePromise, timedOut]);
+    const rawModels = await Promise.race([
+      runtime.listModels(controller.signal),
+      timedOut,
+    ]);
+    const discoveredModels = sanitizeCopilotModels(rawModels);
+    const models = discoveredModels.filter(
+      (model) => model.policy.state !== "disabled"
+    );
+
+    if (models.length === 0) {
+      return {
+        ok: false,
+        requestId,
+        code: discoveredModels.some(
+          (model) => model.policy.state === "disabled"
+        )
+          ? "org_policy_blocked"
+          : "no_models",
+      };
+    }
+
+    return { ok: true, requestId, models };
+  } catch (error) {
+    return { ok: false, requestId, code: classifyCopilotError(error) };
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+
+    signal?.removeEventListener("abort", abortForCaller);
+
+    if (runtime) {
+      await closeRuntime(runtime);
+    }
+  }
+}
+
+export function sanitizeCopilotModels(
+  values: readonly unknown[]
+): CopilotModel[] {
+  const models = new Map<string, CopilotModel>();
+
+  for (const value of values.slice(0, COPILOT_WORKER_MAX_MODELS)) {
+    const record = asRecord(value);
+    const id = safeString(record?.id);
+
+    if (!id || models.has(id)) {
+      continue;
+    }
+
+    const capabilities = asRecord(record?.capabilities);
+    const limits = asRecord(capabilities?.limits);
+    const supports = asRecord(capabilities?.supports);
+    const policy = asRecord(record?.policy);
+    const billing = asRecord(record?.billing);
+    const candidate = {
+      id,
+      displayName: safeString(record?.name) ?? id,
+      capabilities: compact({
+        supportsVision: safeBoolean(
+          capabilities?.supportsVision,
+          supports?.vision
+        ),
+        supportsReasoningEffort: safeBoolean(
+          capabilities?.supportsReasoningEffort,
+          supports?.reasoningEffort
+        ),
+        maxPromptTokens: safePositiveInteger(
+          capabilities?.maxPromptTokens,
+          limits?.maxPromptTokens,
+          limits?.max_prompt_tokens
+        ),
+        maxContextWindowTokens: safePositiveInteger(
+          capabilities?.maxContextWindowTokens,
+          limits?.maxContextWindowTokens,
+          limits?.max_context_window_tokens
+        ),
+      }),
+      policy: compact({
+        state: safePolicyState(policy?.state),
+      }),
+      billing: compact({
+        multiplier: safeNonNegativeNumber(billing?.multiplier),
+      }),
+    };
+    const parsed = copilotModelSchema.safeParse(candidate);
+
+    if (parsed.success) {
+      models.set(parsed.data.id, parsed.data);
+    }
+  }
+
+  return [...models.values()];
+}
+
+export function classifyCopilotError(
+  error: unknown
+): CopilotValidationErrorCode {
+  if (error instanceof ValidationTimeoutError) {
+    return "timeout";
+  }
+
+  const evidence = collectErrorEvidence(error);
+
+  if (
+    evidence.statuses.has(401) ||
+    intersects(evidence.codes, [
+      "BAD_CREDENTIALS",
+      "INVALID_TOKEN",
+      "TOKEN_EXPIRED",
+      "UNAUTHORIZED",
+    ])
+  ) {
+    return "invalid_token";
+  }
+
+  if (
+    intersects(evidence.codes, [
+      "COPILOT_NOT_ENTITLED",
+      "NO_COPILOT_SUBSCRIPTION",
+      "NO_SUBSCRIPTION",
+    ])
+  ) {
+    return "no_subscription";
+  }
+
+  if (
+    intersects(evidence.codes, [
+      "COPILOT_POLICY_BLOCKED",
+      "ORG_POLICY_BLOCKED",
+      "POLICY_BLOCKED",
+    ])
+  ) {
+    return "org_policy_blocked";
+  }
+
+  if (
+    intersects(evidence.codes, [
+      "ABORT_ERR",
+      "ETIMEDOUT",
+      "ERR_COPILOT_TIMEOUT",
+      "UND_ERR_CONNECT_TIMEOUT",
+      "UND_ERR_HEADERS_TIMEOUT",
+    ])
+  ) {
+    return "timeout";
+  }
+
+  if (
+    intersects(evidence.codes, [
+      "ECONNREFUSED",
+      "ECONNRESET",
+      "EAI_AGAIN",
+      "ENETUNREACH",
+      "ENOTFOUND",
+      "ERR_COPILOT_UNAVAILABLE",
+    ]) ||
+    [...evidence.statuses].some((status) => status >= 500 && status <= 599)
+  ) {
+    return "unavailable";
+  }
+
+  return "unknown";
+}
+
+class ValidationTimeoutError extends Error {
+  readonly code = "ERR_COPILOT_TIMEOUT";
+}
+
+async function closeRuntime(runtime: CopilotRuntimeClient) {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    await Promise.race([
+      runtime.close(),
+      new Promise<void>((resolve) => {
+        timeout = setTimeout(resolve, 3_000);
+        timeout.unref?.();
+      }),
+    ]);
+  } catch {
+    // The request result is already sanitized. Shutdown failures are not
+    // returned because provider errors could contain credential material.
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+function collectErrorEvidence(error: unknown) {
+  const codes = new Set<string>();
+  const statuses = new Set<number>();
+  let current: unknown = error;
+
+  for (let depth = 0; depth < 4 && current; depth += 1) {
+    const record = asRecord(current);
+
+    if (!record) {
+      break;
+    }
+
+    const code = safeString(record.code);
+    const status = safeStatus(record.status) ?? safeStatus(record.statusCode);
+
+    if (code) {
+      codes.add(code.toUpperCase());
+    }
+
+    if (status) {
+      statuses.add(status);
+    }
+
+    current = record.cause;
+  }
+
+  return { codes, statuses };
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function safeString(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim();
+  return normalized.length > 0 && normalized.length <= 255 ? normalized : null;
+}
+
+function safeBoolean(...values: unknown[]): boolean | undefined {
+  return values.find((value): value is boolean => typeof value === "boolean");
+}
+
+function safePositiveInteger(...values: unknown[]): number | undefined {
+  return values.find(
+    (value): value is number =>
+      Number.isInteger(value) &&
+      Number(value) > 0 &&
+      Number(value) <= 10_000_000
+  );
+}
+
+function safeNonNegativeNumber(value: unknown): number | undefined {
+  return typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= 0 &&
+    value <= 1_000_000
+    ? value
+    : undefined;
+}
+
+function safeStatus(value: unknown): number | null {
+  return Number.isInteger(value) && Number(value) >= 100 && Number(value) <= 599
+    ? Number(value)
+    : null;
+}
+
+function safePolicyState(
+  value: unknown
+): "enabled" | "disabled" | "unconfigured" | undefined {
+  return ["enabled", "disabled", "unconfigured"].includes(String(value))
+    ? (String(value) as "enabled" | "disabled" | "unconfigured")
+    : undefined;
+}
+
+function compact<T extends Record<string, unknown>>(value: T) {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entry]) => entry !== undefined)
+  );
+}
+
+function intersects(values: Set<string>, expected: string[]) {
+  return expected.some((value) => values.has(value));
+}

@@ -1,0 +1,71 @@
+# GitHub Copilot validation worker
+
+Serviço Node.js isolado que executa apenas duas operações:
+
+- `GET /health` devolve `{"status":"ok"}` sem versão ou detalhes internos;
+- `POST /v1/copilot/validate` autentica um pedido HMAC e usa
+  `@github/copilot-sdk@1.0.13` para `start()` + `listModels()` + `stop()`.
+
+Não aceita prompts, tools, sessões de conversa nem pedidos de browser. O
+runtime usa `mode: "empty"`, `useLoggedInUser: false`, log level `none` e um
+diretório temporário `0700` removido no fim. `listModels()` é uma operação do
+cliente e não necessita de sessão; por isso não é criada qualquer sessão nem
+existe uma superfície de permission requests. `denyAllPermissions` fica
+exportado como política fail-closed obrigatória para qualquer sessão futura.
+
+O token chega apenas no body HTTPS assinado, é entregue ao SDK em memória e ao
+child process através da opção oficial `gitHubToken`; nunca é usado em URL,
+log, erro, ficheiro ou telemetria da aplicação. O ambiente do child process é
+uma allowlist que exclui o segredo HMAC e quaisquer chaves Supabase/cifragem.
+
+## Executar
+
+```bash
+npm ci
+npm test
+npm start
+```
+
+Variáveis:
+
+| Variável                          | Obrigatória | Regra                                             |
+| --------------------------------- | ----------- | ------------------------------------------------- |
+| `COPILOT_WORKER_HMAC_SECRET`      | sim         | base64 canónico de 32–64 bytes; igual no BFF      |
+| `PORT`                            | não         | `3000` por omissão; Vercel injeta `$PORT`         |
+| `COPILOT_VALIDATION_TIMEOUT_MS`   | não         | 1–15 s, omissão 15 s                              |
+| `COPILOT_WORKER_CLOCK_SKEW_MS`    | não         | 5–120 s, omissão 30 s                             |
+| `COPILOT_WORKER_MAX_CONCURRENCY`  | não         | 1–8, omissão 2                                    |
+| `COPILOT_WORKER_MAX_QUEUE`        | não         | 0–100, omissão 8                                  |
+| `COPILOT_REPLAY_REDIS_URL`        | produção    | URL `redis://`/`rediss://` de um store partilhado |
+| `COPILOT_REPLAY_REDIS_PREFIX`     | não         | prefixo isolado das nonces                        |
+| `COPILOT_REPLAY_STORE_TIMEOUT_MS` | não         | timeout Redis, omissão 1 s                        |
+
+O BFF aceita 25–60 s (`COPILOT_WORKER_TIMEOUT_MS`, 30 s por omissão) e o worker
+aceita no máximo 15 s. A margem mínima de dez segundos cobre cleanup e
+latência da resposta.
+
+Teste real, sempre opt-in:
+
+```bash
+COPILOT_REAL_TEST_TOKEN=github_pat_... npm run test:real
+```
+
+O comando só apresenta o código sanitizado ou o número de modelos. CI usa um
+adapter mock e nunca consome Copilot real.
+
+## Deploy
+
+Construir a partir desta pasta:
+
+```bash
+docker build -f Dockerfile.vercel .
+```
+
+Não configurar `SUPABASE_SERVICE_ROLE_KEY`,
+`LLM_CREDENTIAL_ENCRYPTION_KEY` ou credenciais de utilizador no serviço. Para
+Vercel Services, consultar `deploy/vercel.services.example.json` e a secção de
+deploy no README raiz antes de ativar o preset. O processo falha fechado no
+arranque se detetar a service role, a chave AES ou a anon key do Supabase, ou
+se produção não tiver Redis partilhado. Local/teste usam replay store em
+memória; produção usa `SET NX PX`, com TTL igual ao restante período de
+validade da assinatura.

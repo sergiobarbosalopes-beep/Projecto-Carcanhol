@@ -13,6 +13,7 @@ const eslintConfig = defineConfig([
     ".next/**",
     "out/**",
     "build/**",
+    "services/copilot-worker/dist/**",
     "next-env.d.ts",
   ]),
 ]);
