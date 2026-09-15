@@ -9,7 +9,13 @@ import {
 import {
   collectCopilotErrorEvidence,
   createSafeUnknownCopilotErrorDiagnostic,
+  type CopilotErrorEvidence,
 } from "./error-diagnostics";
+import {
+  probeGitHubCredential,
+  type GitHubCredentialProbe,
+  type GitHubCredentialProbeResult,
+} from "./github-credential-probe";
 
 export type CopilotRuntimeClient = {
   listModels(signal: AbortSignal): Promise<readonly unknown[]>;
@@ -27,6 +33,7 @@ export async function validateCopilotCredential({
   requestId,
   timeoutMs,
   createRuntime,
+  probeCredential = probeGitHubCredential,
   signal,
   onUnknownError,
 }: {
@@ -34,6 +41,7 @@ export async function validateCopilotCredential({
   requestId: string;
   timeoutMs: number;
   createRuntime: CopilotRuntimeFactory;
+  probeCredential?: GitHubCredentialProbe;
   signal?: AbortSignal;
   onUnknownError?: (diagnostic: SafeUnknownCopilotErrorDiagnostic) => void;
 }): Promise<CopilotValidationResponse> {
@@ -47,22 +55,23 @@ export async function validateCopilotCredential({
     controller.abort();
   }
 
-  try {
-    const timedOut = new Promise<never>((_, reject) => {
-      if (controller.signal.aborted) {
-        reject(new ValidationTimeoutError());
-        return;
-      }
+  const timedOut = new Promise<never>((_, reject) => {
+    if (controller.signal.aborted) {
+      reject(new ValidationTimeoutError());
+      return;
+    }
 
-      controller.signal.addEventListener(
-        "abort",
-        () => reject(new ValidationTimeoutError()),
-        { once: true }
-      );
-      timeout = setTimeout(() => {
-        controller.abort();
-      }, timeoutMs);
-    });
+    controller.signal.addEventListener(
+      "abort",
+      () => reject(new ValidationTimeoutError()),
+      { once: true }
+    );
+    timeout = setTimeout(() => {
+      controller.abort();
+    }, timeoutMs);
+  });
+
+  try {
     const runtimePromise = createRuntime(token, requestId, controller.signal);
     void runtimePromise.then(
       async (createdRuntime) => {
@@ -98,8 +107,20 @@ export async function validateCopilotCredential({
     return { ok: true, requestId, models };
   } catch (error) {
     const evidence = collectCopilotErrorEvidence(error);
-    const code = classifyCopilotError(error, evidence);
+    let code = classifyCopilotError(error, evidence);
     let diagnostic: SafeUnknownCopilotErrorDiagnostic | undefined;
+
+    if (code === "unknown" && isSessionAuthenticationBuilderError(evidence)) {
+      try {
+        const probeResult = await Promise.race([
+          probeCredential(token, controller.signal),
+          timedOut,
+        ]);
+        code = applyCredentialProbeResult(probeResult, evidence);
+      } catch {
+        code = controller.signal.aborted ? "timeout" : "unavailable";
+      }
+    }
 
     if (code === "unknown") {
       try {
@@ -277,6 +298,52 @@ function isSessionAuthenticationUnauthorized(message: string | null) {
     message.includes("failed to fetch copilot user info:") &&
     /\b401 unauthorized\b/.test(message)
   );
+}
+
+function isSessionAuthenticationBuilderError(evidence: CopilotErrorEvidence) {
+  return evidence.rpcErrors.some(
+    (rpcError) =>
+      rpcError.numericCode === -32603 &&
+      rpcError.message ===
+        "sdk session authentication failed: network fetch failed: request failed: builder error"
+  );
+}
+
+function applyCredentialProbeResult(
+  result: GitHubCredentialProbeResult,
+  evidence: CopilotErrorEvidence
+): CopilotValidationErrorCode {
+  if (result.outcome === "invalid_token") {
+    return "invalid_token";
+  }
+
+  if (result.outcome === "timeout") {
+    return "timeout";
+  }
+
+  if (result.outcome === "unavailable") {
+    return "unavailable";
+  }
+
+  if (result.status !== null && result.status >= 100 && result.status <= 599) {
+    evidence.statuses.add(result.status);
+  }
+
+  if (result.outcome === "valid") {
+    evidence.stringCodes.add("GITHUB_CREDENTIAL_PROBE_SUCCEEDED");
+    evidence.primaryMessage =
+      "github credential probe succeeded; Copilot runtime transport failed";
+  } else if (result.outcome === "forbidden") {
+    evidence.stringCodes.add("GITHUB_CREDENTIAL_PROBE_FORBIDDEN");
+    evidence.primaryMessage =
+      "github credential probe returned 403; Copilot authorization remains unknown";
+  } else {
+    evidence.stringCodes.add("GITHUB_CREDENTIAL_PROBE_UNEXPECTED_STATUS");
+    evidence.primaryMessage =
+      "github credential probe returned an unexpected status; Copilot runtime transport failed";
+  }
+
+  return "unknown";
 }
 
 class ValidationTimeoutError extends Error {

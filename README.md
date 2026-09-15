@@ -195,6 +195,13 @@ classic `ghp_`. Falhas de autenticação, entitlement, política, timeout e
 catálogo vazio são convertidas em códigos/mensagens locais; respostas remotas
 cruas nunca são devolvidas nem persistidas.
 
+Se o runtime devolver exclusivamente a falha conhecida de transporte durante
+a autenticação da sessão, o worker faz um probe bounded à URL fixa
+`https://api.github.com/user`. Apenas o status é usado: o body e os headers da
+resposta não são lidos. Um `200` não afirma entitlement Copilot e mantém o
+resultado `unknown`; `401` identifica credencial inválida; `403` permanece
+inconclusivo.
+
 O SDK também suporta tokens de utilizador OAuth `gho_` e GitHub App `ghu_`,
 mas estes tipos estão apenas preparados no schema e são rejeitados pelo
 formulário manual. OAuth/GitHub App user-to-server será a opção recomendada

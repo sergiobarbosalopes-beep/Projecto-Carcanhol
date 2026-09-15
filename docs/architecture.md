@@ -306,6 +306,18 @@ Estados específicos só são inferidos de evidência estruturada; um `403`
 genérico fica `unknown`. Mensagens remotas em bruto nunca são
 persistidas/devolvidas.
 
+Uma exceção de diagnóstico estritamente limitada cobre apenas o erro conhecido
+do SDK `-32603` com a mensagem exata de autenticação de sessão terminada em
+`network fetch failed: request failed: builder error`. Dentro do mesmo
+deadline, o worker consulta a URL fixa `https://api.github.com/user`, com
+Bearer em memória, `Accept` e `User-Agent` fixos e redirects rejeitados. Apenas
+o status é observado; body e headers nunca são lidos. `200` confirma somente a
+credencial GitHub e mantém o resultado Copilot como `unknown`, com código
+diagnóstico seguro; `401` é `invalid_token`; `403` não é interpretado como
+falta de subscrição; timeout/rede/`5xx` são transitórios. Outros erros nunca
+acionam o probe. Não se alterou a herança de proxy/CA do child runtime sem
+evidência adicional.
+
 Para `unknown`, o worker cria um diagnóstico efémero com shape fechado
 (`event`, `requestId`, `error.constructor/name/stringCodes/numericCodes/statuses/message`).
 Antes do fallback textual, privilegia `ResponseError.data.code` e statuses

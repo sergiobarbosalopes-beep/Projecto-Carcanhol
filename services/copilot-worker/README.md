@@ -26,8 +26,19 @@ remoção do diretório temporário permanecem como cleanup final. O SDK 1.0.13 
 categoria de erro específica para `models.list`; quando `ResponseError.data`
 traz `code`/status estruturados, estes têm prioridade. Um `ResponseError` sem
 categoria só é classificado como `invalid_token` quando contém a combinação
-conhecida `code=-32603` + `Not authenticated`; mensagens remotas em bruto não
+conhecida `code=-32603` + `Not authenticated`, ou a falha explícita de
+autenticação da sessão com `401 Unauthorized`; mensagens remotas em bruto não
 são devolvidas nem registadas.
+
+Existe um único probe de diagnóstico para a combinação exata
+`code=-32603` + `SDK session authentication failed: network fetch failed:
+request failed: builder error`. O worker faz `GET https://api.github.com/user`
+com URL, `Accept` e `User-Agent` fixos, `redirect: "error"` e o mesmo
+`AbortSignal` do prazo global. Só consulta o status: nunca lê body ou headers.
+`200` mantém `unknown` e acrescenta ao diagnóstico seguro
+`GITHUB_CREDENTIAL_PROBE_SUCCEEDED`; `401` produz `invalid_token`; `403`
+mantém `unknown`; timeout, rate limit, erro de rede e `5xx` permanecem falhas
+transitórias. Nenhum outro erro ativa este probe.
 
 Se a classificação final continuar `unknown`, o worker emite uma única linha
 JSON interna e inclui o mesmo objeto já sanitizado no campo opcional

@@ -8,6 +8,12 @@ import {
 
 const requestId = "d510ccb5-22af-47b5-9280-3b605aac4c68";
 const token = `github_pat_${"S".repeat(40)}`;
+const sessionBuilderError = {
+  name: "ResponseError",
+  code: -32603,
+  message:
+    "SDK session authentication failed: network fetch failed: request failed: builder error",
+};
 
 test("sanitizes and bounds the official model metadata fields", () => {
   const models = sanitizeCopilotModels([
@@ -253,6 +259,167 @@ test("maps a session authentication rejection and still closes", async () => {
   assert.deepEqual(result, { ok: false, requestId, code: "invalid_token" });
   assert.equal(closed, true);
   assert.equal(diagnosticCalls, 0);
+  assert.equal(JSON.stringify(result).includes(token), false);
+});
+
+test("uses the fixed credential probe only for the exact session builder error", async () => {
+  let probeCalls = 0;
+  let closed = false;
+  const result = await validateCopilotCredential({
+    token,
+    requestId,
+    timeoutMs: 100,
+    createRuntime: async () => ({
+      async listModels() {
+        throw sessionBuilderError;
+      },
+      async close() {
+        closed = true;
+      },
+    }),
+    async probeCredential(receivedToken, signal) {
+      probeCalls += 1;
+      assert.equal(receivedToken, token);
+      assert.equal(signal.aborted, false);
+      return { outcome: "valid", status: 200 };
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "unknown");
+  assert.deepEqual(result.diagnostic.error.stringCodes, [
+    "GITHUB_CREDENTIAL_PROBE_SUCCEEDED",
+  ]);
+  assert.deepEqual(result.diagnostic.error.statuses, [200]);
+  assert.equal(
+    result.diagnostic.error.message,
+    "github credential probe succeeded; Copilot runtime transport failed"
+  );
+  assert.equal(JSON.stringify(result).includes(token), false);
+  assert.equal(probeCalls, 1);
+  assert.equal(closed, true);
+
+  const otherResult = await validateCopilotCredential({
+    token,
+    requestId,
+    timeoutMs: 100,
+    createRuntime: async () => ({
+      async listModels() {
+        throw {
+          code: -32603,
+          message: "network fetch failed: request failed: builder error",
+        };
+      },
+      async close() {},
+    }),
+    async probeCredential() {
+      probeCalls += 1;
+      return { outcome: "invalid_token", status: 401 };
+    },
+  });
+
+  assert.equal(otherResult.ok, false);
+  assert.equal(otherResult.code, "unknown");
+  assert.equal(probeCalls, 1);
+
+  const authenticationResult = await validateCopilotCredential({
+    token,
+    requestId,
+    timeoutMs: 100,
+    createRuntime: async () => ({
+      async listModels() {
+        throw {
+          code: -32603,
+          message:
+            "SDK session authentication failed: Failed to fetch Copilot user info: 401 Unauthorized",
+        };
+      },
+      async close() {},
+    }),
+    async probeCredential() {
+      probeCalls += 1;
+      return { outcome: "valid", status: 200 };
+    },
+  });
+
+  assert.equal(authenticationResult.ok, false);
+  assert.equal(authenticationResult.code, "invalid_token");
+  assert.equal(probeCalls, 1);
+});
+
+test("maps credential probe outcomes without inferring entitlement", async () => {
+  const cases = [
+    {
+      probeResult: { outcome: "invalid_token", status: 401 },
+      expectedCode: "invalid_token",
+    },
+    {
+      probeResult: { outcome: "forbidden", status: 403 },
+      expectedCode: "unknown",
+      expectedDiagnosticCode: "GITHUB_CREDENTIAL_PROBE_FORBIDDEN",
+    },
+    {
+      probeResult: { outcome: "timeout", status: null },
+      expectedCode: "timeout",
+    },
+    {
+      probeResult: { outcome: "unavailable", status: null },
+      expectedCode: "unavailable",
+    },
+    {
+      probeResult: { outcome: "unknown", status: 422 },
+      expectedCode: "unknown",
+      expectedDiagnosticCode: "GITHUB_CREDENTIAL_PROBE_UNEXPECTED_STATUS",
+    },
+  ];
+
+  for (const { probeResult, expectedCode, expectedDiagnosticCode } of cases) {
+    const result = await validateCopilotCredential({
+      token,
+      requestId,
+      timeoutMs: 100,
+      createRuntime: async () => ({
+        async listModels() {
+          throw sessionBuilderError;
+        },
+        async close() {},
+      }),
+      async probeCredential() {
+        return probeResult;
+      },
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.code, expectedCode);
+    if (expectedDiagnosticCode) {
+      assert.equal(
+        result.diagnostic?.error.stringCodes.includes(expectedDiagnosticCode),
+        true
+      );
+    } else {
+      assert.equal(result.diagnostic, undefined);
+    }
+    assert.equal(JSON.stringify(result).includes(token), false);
+  }
+});
+
+test("fails closed when an injected credential probe throws", async () => {
+  const result = await validateCopilotCredential({
+    token,
+    requestId,
+    timeoutMs: 100,
+    createRuntime: async () => ({
+      async listModels() {
+        throw sessionBuilderError;
+      },
+      async close() {},
+    }),
+    async probeCredential() {
+      throw new Error(`probe failed for ${token}`);
+    },
+  });
+
+  assert.deepEqual(result, { ok: false, requestId, code: "unavailable" });
   assert.equal(JSON.stringify(result).includes(token), false);
 });
 
