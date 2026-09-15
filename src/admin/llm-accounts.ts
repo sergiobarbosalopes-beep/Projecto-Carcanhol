@@ -7,20 +7,37 @@ import {
   isManuallyManagedLlmCredentialType,
 } from "@/src/admin/llm-validation";
 import {
+  validateLlmProviderCredential,
+  type LlmProviderValidationResult,
+  type LlmValidationErrorCode,
+} from "@/src/admin/llm-provider-validation";
+import { getLlmValidationGuidance } from "@/src/admin/llm-validation-guidance";
+import { persistOnlyAfterValidation } from "@/src/admin/validated-account-creation";
+import {
   createClient,
   createServiceRoleClient,
   type CarcanholClient,
 } from "@/src/database/server";
-import { encryptCredentialForStorage } from "@/src/security/llm-credentials";
+import {
+  decryptCredentialForValidation,
+  encryptCredentialForStorage,
+} from "@/src/security/llm-credentials";
 import type {
+  Json,
   LlmAccount,
+  LlmAccountModel,
+  LlmAccountModelPublic,
   LlmAccountPublic,
   LlmCredentialType,
   LlmProvider,
 } from "@/src/types/supabase";
 
 const PUBLIC_ACCOUNT_COLUMNS =
-  "id, user_id, provider, display_name, credential_type, status, custom_endpoint, credential_suffix, credential_updated_at, last_validation_status, last_validation_at, last_validation_error_code, created_at, updated_at";
+  "id, user_id, provider, display_name, credential_type, status, custom_endpoint, credential_suffix, credential_updated_at, last_validation_status, last_validation_at, last_validation_error_code, validation_generation, last_validation_request_id, created_at, updated_at";
+const PUBLIC_MODEL_COLUMNS =
+  "id, user_id, account_id, provider_model_id, display_name, enabled, discovery_metadata, is_stale, discovered_at, last_seen_at, created_at, updated_at";
+
+const validationRequests = new Map<string, Promise<LlmAccountPublic | null>>();
 
 const CREDENTIAL_TYPE_BY_PROVIDER: Record<
   LlmProvider,
@@ -61,14 +78,22 @@ export async function listLlmAccounts(
     });
   }
 
-  return data.map(toPublicAccount);
+  const models = await listModelsForAccounts(
+    client,
+    userId,
+    data.map((account) => account.id)
+  );
+
+  return data.map((account) =>
+    toPublicAccount(account, models.get(account.id) ?? [])
+  );
 }
 
 export async function createLlmAccount(
   userId: string,
   input: CreateLlmAccountInput
 ): Promise<LlmAccountPublic> {
-  await createAuthorizedClient(userId);
+  const client = await createAuthorizedClient(userId);
   const credentialError = getLlmCredentialError(
     input.provider,
     input.credential
@@ -78,47 +103,190 @@ export async function createLlmAccount(
     throw new LlmCredentialValidationError(credentialError);
   }
 
-  const accountId = randomUUID();
-  const encrypted = encryptCredentialForStorage(input.credential, {
-    userId,
-    accountId,
-    provider: input.provider,
+  const validationRequestId = randomUUID();
+  const creation = await persistOnlyAfterValidation({
+    validate: () =>
+      validateLlmProviderCredential(
+        input.provider,
+        input.credential,
+        validationRequestId
+      ),
+    persist: async (models) => {
+      const accountId = randomUUID();
+      const encrypted = encryptCredentialForStorage(input.credential, {
+        userId,
+        accountId,
+        provider: input.provider,
+      });
+      const serviceClient = createServiceRoleClient();
+      const { data, error } = await serviceClient
+        .rpc("create_validated_llm_account", {
+          p_account_id: accountId,
+          p_user_id: userId,
+          p_provider: input.provider,
+          p_display_name: input.displayName,
+          p_credential_type: CREDENTIAL_TYPE_BY_PROVIDER[input.provider],
+          p_custom_endpoint:
+            input.provider === "openai_compatible"
+              ? (input.customEndpoint ?? null)
+              : null,
+          p_credential_suffix: credentialSuffix(input.credential),
+          p_ciphertext: encrypted.ciphertext,
+          p_nonce: encrypted.nonce,
+          p_auth_tag: encrypted.authTag,
+          p_algorithm: encrypted.algorithm,
+          p_envelope_version: encrypted.envelopeVersion,
+          p_key_version: encrypted.keyVersion,
+          p_validation_request_id: validationRequestId,
+          p_models: models as Json,
+        })
+        .single();
+
+      if (error) {
+        if (error.code === "23505") {
+          throw new LlmAccountConflictError(
+            "Já existe uma conta LLM com este nome."
+          );
+        }
+
+        throw new Error("Não foi possível criar a conta LLM.", {
+          cause: error,
+        });
+      }
+
+      const created = await getOwnedPublicAccount(client, userId, data.id);
+
+      if (!created) {
+        throw new Error(
+          "A conta validada não ficou disponível após a criação."
+        );
+      }
+
+      return created;
+    },
   });
+
+  if (!creation.ok) {
+    throw new LlmProviderValidationError(creation.code);
+  }
+
+  return creation.value;
+}
+
+export async function revalidateLlmAccount(
+  userId: string,
+  accountId: string
+): Promise<LlmAccountPublic | null> {
+  const key = `${userId}:${accountId}`;
+  const current = validationRequests.get(key);
+
+  if (current) {
+    return current;
+  }
+
+  const request = revalidateLlmAccountOnce(userId, accountId).finally(() => {
+    if (validationRequests.get(key) === request) {
+      validationRequests.delete(key);
+    }
+  });
+  validationRequests.set(key, request);
+
+  return request;
+}
+
+async function revalidateLlmAccountOnce(
+  userId: string,
+  accountId: string
+): Promise<LlmAccountPublic | null> {
+  const client = await createAuthorizedClient(userId);
+  const current = await getOwnedAccount(client, userId, accountId);
+
+  if (!current) {
+    return null;
+  }
+
+  if (current.provider !== "github_copilot") {
+    throw new LlmProviderValidationError("provider_validation_unavailable");
+  }
+
+  const validationRequestId = randomUUID();
   const serviceClient = createServiceRoleClient();
-  const { data, error } = await serviceClient
-    .rpc("create_llm_account_with_secret", {
+  const { data: secret, error: beginError } = await serviceClient
+    .rpc("begin_llm_account_validation", {
       p_account_id: accountId,
       p_user_id: userId,
-      p_provider: input.provider,
-      p_display_name: input.displayName,
-      p_credential_type: CREDENTIAL_TYPE_BY_PROVIDER[input.provider],
-      p_custom_endpoint:
-        input.provider === "openai_compatible"
-          ? (input.customEndpoint ?? null)
-          : null,
-      p_credential_suffix: credentialSuffix(input.credential),
-      p_ciphertext: encrypted.ciphertext,
-      p_nonce: encrypted.nonce,
-      p_auth_tag: encrypted.authTag,
-      p_algorithm: encrypted.algorithm,
-      p_envelope_version: encrypted.envelopeVersion,
-      p_key_version: encrypted.keyVersion,
+      p_validation_request_id: validationRequestId,
     })
-    .single();
+    .maybeSingle();
 
-  if (error) {
-    if (error.code === "23505") {
-      throw new LlmAccountConflictError(
-        "Já existe uma conta LLM com este nome."
-      );
-    }
-
-    throw new Error("Não foi possível criar a conta LLM.", {
-      cause: error,
+  if (beginError) {
+    throw new Error("Não foi possível iniciar a validação da conta LLM.", {
+      cause: beginError,
     });
   }
 
-  return toPublicAccount(data);
+  if (!secret) {
+    return null;
+  }
+
+  let credential = "";
+  let validation: LlmProviderValidationResult;
+
+  try {
+    if (secret.algorithm !== "aes-256-gcm" || secret.envelope_version !== 1) {
+      throw new Error("Unsupported credential envelope.");
+    }
+
+    credential = decryptCredentialForValidation(
+      {
+        ciphertext: secret.ciphertext,
+        nonce: secret.nonce,
+        authTag: secret.auth_tag,
+        algorithm: "aes-256-gcm",
+        envelopeVersion: 1,
+        keyVersion: secret.key_version,
+      },
+      {
+        userId,
+        accountId,
+        provider: secret.aad_provider,
+      }
+    );
+    validation = await validateLlmProviderCredential(
+      current.provider,
+      credential,
+      validationRequestId
+    );
+  } catch {
+    validation = { ok: false, code: "unknown" };
+  } finally {
+    credential = "";
+  }
+
+  const { data: applied, error: applyError } = await serviceClient.rpc(
+    "apply_llm_account_validation",
+    {
+      p_account_id: accountId,
+      p_user_id: userId,
+      p_validation_request_id: validationRequestId,
+      p_validation_generation: secret.validation_generation,
+      p_succeeded: validation.ok,
+      p_error_code: validation.ok ? null : validation.code,
+      p_models: validation.ok ? (validation.models as Json) : [],
+    }
+  );
+
+  if (applyError) {
+    throw new Error("Não foi possível aplicar a validação da conta LLM.", {
+      cause: applyError,
+    });
+  }
+
+  if (!applied) {
+    throw new LlmValidationSupersededError();
+  }
+
+  return getOwnedPublicAccount(client, userId, accountId);
 }
 
 export async function updateLlmAccount(
@@ -178,7 +346,13 @@ export async function updateLlmAccount(
     );
   }
 
-  return toPublicAccount(data);
+  const updated = await getOwnedPublicAccount(client, userId, data.id);
+
+  if (!updated) {
+    throw new Error("A conta atualizada deixou de estar disponível.");
+  }
+
+  return updated;
 }
 
 export async function replaceLlmCredential(
@@ -237,7 +411,13 @@ export async function replaceLlmCredential(
     });
   }
 
-  return toPublicAccount(data);
+  const rotated = await getOwnedPublicAccount(client, userId, data.id);
+
+  if (!rotated) {
+    throw new Error("A conta atualizada deixou de estar disponível.");
+  }
+
+  return rotated;
 }
 
 export async function permanentlyDeleteLlmAccount(
@@ -324,11 +504,62 @@ async function getOwnedAccount(
   return data;
 }
 
+async function getOwnedPublicAccount(
+  client: CarcanholClient,
+  userId: string,
+  accountId: string
+): Promise<LlmAccountPublic | null> {
+  const account = await getOwnedAccount(client, userId, accountId);
+
+  if (!account) {
+    return null;
+  }
+
+  const models = await listModelsForAccounts(client, userId, [accountId]);
+  return toPublicAccount(account, models.get(accountId) ?? []);
+}
+
+async function listModelsForAccounts(
+  client: CarcanholClient,
+  userId: string,
+  accountIds: string[]
+) {
+  const byAccount = new Map<string, LlmAccountModel[]>();
+
+  if (accountIds.length === 0) {
+    return byAccount;
+  }
+
+  const { data, error } = await client
+    .from("llm_account_models")
+    .select(PUBLIC_MODEL_COLUMNS)
+    .eq("user_id", userId)
+    .in("account_id", accountIds)
+    .order("display_name", { ascending: true });
+
+  if (error) {
+    throw new Error("Não foi possível carregar os modelos LLM.", {
+      cause: error,
+    });
+  }
+
+  for (const model of data) {
+    const current = byAccount.get(model.account_id) ?? [];
+    current.push(model);
+    byAccount.set(model.account_id, current);
+  }
+
+  return byAccount;
+}
+
 function credentialSuffix(credential: string) {
   return credential.slice(-4);
 }
 
-function toPublicAccount(account: LlmAccount): LlmAccountPublic {
+function toPublicAccount(
+  account: LlmAccount,
+  models: LlmAccountModel[]
+): LlmAccountPublic {
   return {
     id: account.id,
     provider: account.provider,
@@ -343,9 +574,45 @@ function toPublicAccount(account: LlmAccount): LlmAccountPublic {
     last_validation_error_code: account.last_validation_error_code,
     created_at: account.created_at,
     updated_at: account.updated_at,
+    models: models.map(toPublicModel),
+  };
+}
+
+function toPublicModel(model: LlmAccountModel): LlmAccountModelPublic {
+  const metadata =
+    typeof model.discovery_metadata === "object" &&
+    model.discovery_metadata !== null &&
+    !Array.isArray(model.discovery_metadata)
+      ? model.discovery_metadata
+      : {};
+
+  return {
+    id: model.id,
+    provider_model_id: model.provider_model_id,
+    display_name: model.display_name,
+    enabled: model.enabled,
+    is_stale: model.is_stale,
+    discovered_at: model.discovered_at,
+    last_seen_at: model.last_seen_at,
+    capabilities: metadata.capabilities ?? {},
+    policy: metadata.policy ?? {},
+    billing: metadata.billing ?? {},
   };
 }
 
 export class LlmAccountConflictError extends Error {}
 export class LlmAccountLifecycleError extends Error {}
 export class LlmCredentialValidationError extends Error {}
+export class LlmValidationSupersededError extends Error {}
+export class LlmProviderValidationError extends Error {
+  readonly code: LlmValidationErrorCode;
+  readonly action: string;
+
+  constructor(code: LlmValidationErrorCode) {
+    const guidance = getLlmValidationGuidance(code);
+    super(guidance?.message ?? "Não foi possível validar a conta LLM.");
+    this.code = code;
+    this.action =
+      guidance?.action ?? "Revise a configuração e tente novamente.";
+  }
+}

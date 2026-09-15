@@ -8,6 +8,7 @@ import "server-only";
 
 import { z } from "zod";
 import { parseBase64EncryptionKey } from "@/src/security/llm-credential-crypto";
+import { parseWorkerHmacSecret } from "@/services/copilot-worker/src/request-auth";
 
 const publicEnvSchema = z.object({
   NEXT_PUBLIC_SUPABASE_URL: z.string().url({
@@ -47,6 +48,67 @@ const serverEnvSchema = z.object({
         "LLM_CREDENTIAL_ENCRYPTION_KEY_VERSION must be a safe 1-32 character identifier",
     })
     .default("1"),
+});
+
+const copilotWorkerUrlSchema = z.string().transform((value, context) => {
+  let url: URL;
+
+  try {
+    url = new URL(value);
+  } catch {
+    context.addIssue({
+      code: "custom",
+      message: "COPILOT_WORKER_URL must be an absolute URL",
+    });
+    return z.NEVER;
+  }
+
+  const localDevelopmentUrl =
+    process.env.NODE_ENV !== "production" &&
+    url.protocol === "http:" &&
+    ["127.0.0.1", "localhost"].includes(url.hostname);
+
+  if (
+    (url.protocol !== "https:" && !localDevelopmentUrl) ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash ||
+    (url.pathname !== "/" && url.pathname !== "")
+  ) {
+    context.addIssue({
+      code: "custom",
+      message:
+        "COPILOT_WORKER_URL must be an HTTPS origin without credentials, path, query, or fragment",
+    });
+    return z.NEVER;
+  }
+
+  return url.origin;
+});
+
+const workerHmacSecretSchema = z.string().transform((value, context) => {
+  try {
+    return parseWorkerHmacSecret(value);
+  } catch {
+    context.addIssue({
+      code: "custom",
+      message:
+        "COPILOT_WORKER_HMAC_SECRET must be canonical base64 for 32-64 bytes",
+    });
+    return z.NEVER;
+  }
+});
+
+const copilotWorkerEnvSchema = z.object({
+  COPILOT_WORKER_URL: copilotWorkerUrlSchema,
+  COPILOT_WORKER_HMAC_SECRET: workerHmacSecretSchema,
+  COPILOT_WORKER_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .min(25_000)
+    .max(60_000)
+    .default(30_000),
 });
 
 /** Environment variables that are safe to expose to the browser. */
@@ -96,6 +158,23 @@ export function getServerEnv() {
   if (!parsed.success) {
     throw new Error(
       `Invalid server environment variables: ${parsed.error.message}`
+    );
+  }
+
+  return parsed.data;
+}
+
+/** Connection details for the isolated Copilot runtime worker. */
+export function getCopilotWorkerEnv() {
+  const parsed = copilotWorkerEnvSchema.safeParse({
+    COPILOT_WORKER_URL: process.env.COPILOT_WORKER_URL,
+    COPILOT_WORKER_HMAC_SECRET: process.env.COPILOT_WORKER_HMAC_SECRET,
+    COPILOT_WORKER_TIMEOUT_MS: process.env.COPILOT_WORKER_TIMEOUT_MS,
+  });
+
+  if (!parsed.success) {
+    throw new Error(
+      `Invalid Copilot worker environment variables: ${parsed.error.message}`
     );
   }
 

@@ -14,6 +14,14 @@ import type {
   LLM_PROVIDERS,
 } from "@/src/admin/llm-validation";
 
+export type Json =
+  | string
+  | number
+  | boolean
+  | null
+  | { [key: string]: Json | undefined }
+  | Json[];
+
 export type Profile = {
   id: string;
   email: string | null;
@@ -64,15 +72,21 @@ export type LlmAccount = {
   last_validation_status: "succeeded" | "failed" | null;
   last_validation_at: string | null;
   last_validation_error_code: string | null;
+  validation_generation: number;
+  last_validation_request_id: string | null;
   created_at: string;
   updated_at: string;
 };
 
 export type LlmAccountPublic = Omit<
   LlmAccount,
-  "user_id" | "credential_suffix"
+  | "user_id"
+  | "credential_suffix"
+  | "validation_generation"
+  | "last_validation_request_id"
 > & {
   credential_hint: string;
+  models: LlmAccountModelPublic[];
 };
 
 type LlmAccountSecret = {
@@ -90,18 +104,34 @@ type LlmAccountSecret = {
   updated_at: string;
 };
 
-type LlmAccountModel = {
+export type LlmAccountModel = {
   id: string;
   user_id: string;
   account_id: string;
   provider_model_id: string;
   display_name: string;
   enabled: boolean;
-  discovery_metadata: Record<string, unknown>;
+  discovery_metadata: Json;
+  is_stale: boolean;
   discovered_at: string;
   last_seen_at: string;
   created_at: string;
   updated_at: string;
+};
+
+export type LlmAccountModelPublic = Pick<
+  LlmAccountModel,
+  | "id"
+  | "provider_model_id"
+  | "display_name"
+  | "enabled"
+  | "is_stale"
+  | "discovered_at"
+  | "last_seen_at"
+> & {
+  capabilities: Json;
+  policy: Json;
+  billing: Json;
 };
 
 type LlmRoutingRule = {
@@ -241,7 +271,7 @@ export type Database = {
     };
     Views: Record<string, never>;
     Functions: {
-      create_llm_account_with_secret: {
+      create_validated_llm_account: {
         Args: {
           p_account_id: string;
           p_user_id: string;
@@ -256,8 +286,41 @@ export type Database = {
           p_algorithm: string;
           p_envelope_version: number;
           p_key_version: string;
+          p_validation_request_id: string;
+          p_models: Json;
         };
         Returns: LlmAccount[];
+      };
+      begin_llm_account_validation: {
+        Args: {
+          p_account_id: string;
+          p_user_id: string;
+          p_validation_request_id: string;
+        };
+        Returns: {
+          account_id: string;
+          provider: string;
+          aad_provider: string;
+          ciphertext: string;
+          nonce: string;
+          auth_tag: string;
+          algorithm: string;
+          envelope_version: number;
+          key_version: string;
+          validation_generation: number;
+        }[];
+      };
+      apply_llm_account_validation: {
+        Args: {
+          p_account_id: string;
+          p_user_id: string;
+          p_validation_request_id: string;
+          p_validation_generation: number;
+          p_succeeded: boolean;
+          p_error_code: string | null;
+          p_models: Json;
+        };
+        Returns: boolean;
       };
       rotate_llm_account_secret: {
         Args: {
