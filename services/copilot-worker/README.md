@@ -6,22 +6,23 @@ Serviço Node.js isolado que executa apenas duas operações:
   `200 {"status":"ok"}` ou `503 {"status":"unavailable"}` sem versão ou
   detalhes internos;
 - `POST /v1/copilot/validate` autentica um pedido HMAC e usa
-  `@github/copilot-sdk@1.0.13` para `start()` +
-  `rpc.models.list({ gitHubToken })` + `stop()`.
+  `@github/copilot-sdk@1.0.13` para `start()` + sessão efémera +
+  `session.rpc.model.list({})` + cleanup + `stop()`.
 
-Não aceita prompts, tools, sessões de conversa nem pedidos de browser. O
-runtime usa `mode: "empty"`, `useLoggedInUser: false`, log level `none` e um
-diretório temporário `0700` removido no fim. A listagem de modelos é uma RPC do
-cliente e não necessita de sessão; por isso não é criada qualquer sessão nem
-existe uma superfície de permission requests. `denyAllPermissions` fica
-exportado como política fail-closed obrigatória para qualquer sessão futura.
+Não aceita prompts, tools ou pedidos de browser. O runtime usa
+`mode: "empty"`, `useLoggedInUser: false`, log level `none` e um diretório
+temporário `0700` removido no fim. Cada validação cria uma sessão request-bound
+sem modelo, prompt, tools, MCP, agents, skills, memory, telemetry ou session
+store; `denyAllPermissions` rejeita qualquer permission request inesperada.
 
 `auth.getStatus` não é usado como precondição: pode continuar `false` antes de
-o runtime consumir o token. Depois de `client.start()`, o adapter usa a API
-pública tipada `client.rpc.models.list({ gitHubToken })` e devolve
-`result.models`; isto força o runtime efémero a resolver o token em memória.
-Esta RPC é a validação autoritativa da identidade, entitlement, política e
-modelos. O SDK 1.0.13 não tipa uma
+o runtime consumir o token. Depois de `client.start()`, o adapter passa
+`gitHubToken` exclusivamente a `createSession`, omite `model`, chama a API
+pública tipada `session.rpc.model.list({})` e devolve `result.list`. Esta RPC
+usa o auth/integration context da sessão e é a validação autoritativa da
+identidade, entitlement, política e modelos. Em `finally`, o worker executa
+`session.disconnect()` + `client.deleteSession(sessionId)`; `client.stop()` e a
+remoção do diretório temporário permanecem como cleanup final. O SDK 1.0.13 não tipa uma
 categoria de erro específica para `models.list`; quando `ResponseError.data`
 traz `code`/status estruturados, estes têm prioridade. Um `ResponseError` sem
 categoria só é classificado como `invalid_token` quando contém a combinação
@@ -59,10 +60,10 @@ persistido, não aparece em `GET /api/admin/llm-accounts` e não é renderizado
 por omissão na UI. Respostas com qualquer outro `code` rejeitam
 contratualmente um campo `diagnostic`.
 
-O token chega apenas no body HTTPS assinado, é entregue ao SDK em memória e ao
-child process através da opção oficial `gitHubToken`; nunca é usado em URL,
-log, erro, ficheiro ou telemetria da aplicação. O ambiente do child process é
-uma allowlist que exclui o segredo HMAC e quaisquer chaves Supabase/cifragem.
+O token chega apenas no body HTTPS assinado e é entregue ao SDK em memória
+como `SessionConfig.gitHubToken`; nunca é usado em URL, log, erro, ficheiro ou
+telemetria da aplicação. O ambiente do child process é uma allowlist que
+exclui o token, o segredo HMAC e quaisquer chaves Supabase/cifragem.
 
 ## Executar
 

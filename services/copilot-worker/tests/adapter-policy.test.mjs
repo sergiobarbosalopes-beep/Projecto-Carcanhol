@@ -3,8 +3,9 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   buildChildRuntimeEnvironment,
+  createValidationSessionConfig,
   denyAllPermissions,
-  listModelsWithToken,
+  listModelsWithSession,
 } from "../dist/copilot-adapter.js";
 import {
   assertWorkerEnvironmentIsolated,
@@ -109,43 +110,164 @@ test("pins the SDK and configures empty mode without logged-in fallback", () => 
   assert.match(adapter, /logLevel: "none"/);
   assert.doesNotMatch(adapter, /getAuthStatus/);
   assert.doesNotMatch(adapter, /client\.listModels\(\)/);
-  assert.match(adapter, /client\.rpc\.models\.list/);
+  assert.doesNotMatch(adapter, /client\.rpc\.models\.list/);
+  assert.match(adapter, /client\.createSession/);
+  assert.match(adapter, /session\.rpc\.model\.list/);
+  assert.match(adapter, /activeSession\.disconnect/);
+  assert.match(adapter, /client\.deleteSession/);
+  assert.doesNotMatch(adapter, /\.send(?:AndWait)?\(/);
   assert.doesNotMatch(adapter, /approveAll/);
+
+  const constructorStart = adapter.indexOf("new CopilotClient({");
+  const constructorEnd = adapter.indexOf("});", constructorStart);
+  assert.notEqual(constructorStart, -1);
+  assert.notEqual(constructorEnd, -1);
+  assert.doesNotMatch(
+    adapter.slice(constructorStart, constructorEnd),
+    /gitHubToken/
+  );
 });
 
-test("sends the exact token payload through the typed models RPC", async () => {
+test("builds a request-bound empty session without a model or tools", () => {
+  const token = `github_pat_${"A".repeat(40)}`;
+  const sessionId = "3bebcccd-5254-40f8-809f-3a14579dba46";
+  const config = createValidationSessionConfig(token, sessionId);
+
+  assert.equal(config.sessionId, sessionId);
+  assert.equal(config.gitHubToken, token);
+  assert.equal("model" in config, false);
+  assert.equal("systemMessage" in config, false);
+  assert.equal("onEvent" in config, false);
+  assert.deepEqual(config.availableTools, []);
+  assert.deepEqual(config.excludedTools, ["builtin:*", "mcp:*", "custom:*"]);
+  assert.deepEqual(config.tools, []);
+  assert.deepEqual(config.mcpServers, {});
+  assert.deepEqual(config.customAgents, []);
+  assert.deepEqual(config.includedBuiltinSkills, []);
+  assert.equal(config.enableSkills, false);
+  assert.equal(config.enableSessionStore, false);
+  assert.equal(config.enableSessionTelemetry, false);
+  assert.deepEqual(config.infiniteSessions, { enabled: false });
+  assert.deepEqual(config.memory, { enabled: false });
+  assert.deepEqual(config.onPermissionRequest({}, { sessionId }), {
+    kind: "reject",
+    feedback: "Tool execution is disabled by service policy.",
+  });
+});
+
+test("lists session models with token only in session.create and cleans up", async () => {
+  const events = [];
   let authStatusCalls = 0;
-  let listModelsCalls = 0;
-  const payloads = [];
+  let clientListModelsCalls = 0;
+  let promptCalls = 0;
+  let capturedConfig;
+  let capturedListParams;
   const client = {
     async getAuthStatus() {
       authStatusCalls += 1;
       return { isAuthenticated: false };
     },
     async listModels() {
-      listModelsCalls += 1;
+      clientListModelsCalls += 1;
       return [{ id: "gpt-5", name: "GPT-5" }];
     },
-    rpc: {
-      models: {
-        async list(payload) {
-          payloads.push(payload);
-          return { models: [{ id: "gpt-5", name: "GPT-5" }] };
+    async createSession(config) {
+      events.push("create");
+      capturedConfig = config;
+      return {
+        rpc: {
+          model: {
+            async list(params) {
+              events.push("list");
+              capturedListParams = params;
+              return { list: [{ id: "gpt-5", name: "GPT-5" }] };
+            },
+          },
         },
-      },
+        async send() {
+          promptCalls += 1;
+        },
+        async sendAndWait() {
+          promptCalls += 1;
+        },
+        async disconnect() {
+          events.push("disconnect");
+        },
+      };
+    },
+    async deleteSession(sessionId) {
+      events.push(`delete:${sessionId}`);
     },
   };
+  const token = `github_pat_${"A".repeat(40)}`;
+  const sessionId = "3bebcccd-5254-40f8-809f-3a14579dba46";
 
-  const models = await listModelsWithToken(
+  const models = await listModelsWithSession(
     client,
-    `github_pat_${"A".repeat(40)}`,
+    token,
+    sessionId,
     new AbortController().signal
   );
 
   assert.equal(authStatusCalls, 0);
-  assert.equal(listModelsCalls, 0);
-  assert.deepEqual(payloads, [{ gitHubToken: `github_pat_${"A".repeat(40)}` }]);
+  assert.equal(clientListModelsCalls, 0);
+  assert.equal(promptCalls, 0);
+  assert.equal(capturedConfig.gitHubToken, token);
+  assert.equal(capturedConfig.sessionId, sessionId);
+  assert.deepEqual(capturedListParams, {});
+  assert.deepEqual(events, [
+    "create",
+    "list",
+    "disconnect",
+    `delete:${sessionId}`,
+  ]);
   assert.equal(models[0].id, "gpt-5");
+});
+
+test("cleans the ephemeral session after model-list errors", async () => {
+  const events = [];
+  const client = createSessionClient(events, async () => {
+    throw { code: -32603, message: "Not authenticated" };
+  });
+
+  await assert.rejects(() =>
+    listModelsWithSession(
+      client,
+      `github_pat_${"B".repeat(40)}`,
+      "d510ccb5-22af-47b5-9280-3b605aac4c68",
+      new AbortController().signal
+    )
+  );
+  assert.deepEqual(events, [
+    "create",
+    "list",
+    "disconnect",
+    "delete:d510ccb5-22af-47b5-9280-3b605aac4c68",
+  ]);
+});
+
+test("cleans the ephemeral session when model listing is aborted", async () => {
+  const events = [];
+  const controller = new AbortController();
+  const client = createSessionClient(events, async () => {
+    controller.abort();
+    throw new DOMException("aborted", "AbortError");
+  });
+
+  await assert.rejects(() =>
+    listModelsWithSession(
+      client,
+      `github_pat_${"C".repeat(40)}`,
+      "ef4acbcc-cb43-4435-9e3f-f16472bcbb43",
+      controller.signal
+    )
+  );
+  assert.deepEqual(events, [
+    "create",
+    "list",
+    "disconnect",
+    "delete:ef4acbcc-cb43-4435-9e3f-f16472bcbb43",
+  ]);
 });
 
 test("uses an atomic Redis nonce claim with expiry", () => {
@@ -157,3 +279,27 @@ test("uses an atomic Redis nonce claim with expiry", () => {
   assert.match(replayStore, /condition: "NX"/);
   assert.match(replayStore, /expiration: \{ type: "PX"/);
 });
+
+function createSessionClient(events, listModels) {
+  return {
+    async createSession() {
+      events.push("create");
+      return {
+        rpc: {
+          model: {
+            async list() {
+              events.push("list");
+              return listModels();
+            },
+          },
+        },
+        async disconnect() {
+          events.push("disconnect");
+        },
+      };
+    },
+    async deleteSession(sessionId) {
+      events.push(`delete:${sessionId}`);
+    },
+  };
+}

@@ -1,7 +1,11 @@
 import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CopilotClient, type PermissionHandler } from "@github/copilot-sdk";
+import {
+  CopilotClient,
+  type PermissionHandler,
+  type SessionConfig,
+} from "@github/copilot-sdk";
 import type { CopilotRuntimeClient, CopilotRuntimeFactory } from "./runtime";
 
 export const denyAllPermissions: PermissionHandler = () => ({
@@ -11,7 +15,7 @@ export const denyAllPermissions: PermissionHandler = () => ({
 
 export const createCopilotSdkRuntime: CopilotRuntimeFactory = async (
   token,
-  _requestId,
+  requestId,
   signal
 ) => {
   signal.throwIfAborted();
@@ -35,7 +39,6 @@ export const createCopilotSdkRuntime: CopilotRuntimeFactory = async (
     mode: "empty",
     baseDirectory,
     workingDirectory: baseDirectory,
-    gitHubToken: token,
     useLoggedInUser: false,
     logLevel: "none",
     env: buildChildRuntimeEnvironment(baseDirectory),
@@ -60,7 +63,8 @@ export const createCopilotSdkRuntime: CopilotRuntimeFactory = async (
     baseDirectory,
     signal,
     abortRuntime,
-    token
+    token,
+    requestId
   );
 };
 
@@ -70,11 +74,21 @@ class CopilotSdkRuntime implements CopilotRuntimeClient {
     private readonly baseDirectory: string,
     private readonly signal: AbortSignal,
     private readonly abortRuntime: () => void,
-    private token: string
+    private token: string,
+    private readonly sessionId: string
   ) {}
 
   async listModels(signal: AbortSignal) {
-    return listModelsWithToken(this.client, this.token, signal);
+    try {
+      return await listModelsWithSession(
+        this.client,
+        this.token,
+        this.sessionId,
+        signal
+      );
+    } finally {
+      this.token = "";
+    }
   }
 
   async close() {
@@ -95,15 +109,85 @@ class CopilotSdkRuntime implements CopilotRuntimeClient {
   }
 }
 
-export async function listModelsWithToken(
-  client: Pick<CopilotClient, "rpc">,
+export function createValidationSessionConfig(
   token: string,
+  sessionId: string
+): SessionConfig {
+  return {
+    sessionId,
+    gitHubToken: token,
+    availableTools: [],
+    excludedTools: ["builtin:*", "mcp:*", "custom:*"],
+    tools: [],
+    canvases: [],
+    commands: [],
+    mcpServers: {},
+    customAgents: [],
+    skillDirectories: [],
+    pluginDirectories: [],
+    instructionDirectories: [],
+    includedBuiltinSkills: [],
+    enableConfigDiscovery: false,
+    enableExperimentalMode: false,
+    enableSessionTelemetry: false,
+    enableFileChangeTracking: false,
+    enableMcpApps: false,
+    enableManagedSettings: false,
+    enableOnDemandInstructionDiscovery: false,
+    enableFileHooks: false,
+    enableHostGitOperations: false,
+    enableSessionStore: false,
+    enableSkills: false,
+    skipCustomInstructions: true,
+    skipEmbeddingRetrieval: true,
+    embeddingCacheStorage: "in-memory",
+    mcpOAuthTokenStorage: "in-memory",
+    infiniteSessions: { enabled: false },
+    memory: { enabled: false },
+    largeOutput: { enabled: false },
+    customAgentsLocalOnly: true,
+    coauthorEnabled: false,
+    manageScheduleEnabled: false,
+    requestCanvasRenderer: false,
+    requestExtensions: false,
+    streaming: false,
+    includeSubAgentStreamingEvents: false,
+    remoteSession: "off",
+    onPermissionRequest: denyAllPermissions,
+  };
+}
+
+export async function listModelsWithSession(
+  client: Pick<CopilotClient, "createSession" | "deleteSession">,
+  token: string,
+  sessionId: string,
   signal: AbortSignal
 ) {
-  signal.throwIfAborted();
-  const result = await client.rpc.models.list({ gitHubToken: token });
-  signal.throwIfAborted();
-  return result.models;
+  let session: Awaited<ReturnType<CopilotClient["createSession"]>> | null =
+    null;
+
+  try {
+    signal.throwIfAborted();
+    session = await client.createSession(
+      createValidationSessionConfig(token, sessionId)
+    );
+    signal.throwIfAborted();
+    const result = await session.rpc.model.list({});
+    signal.throwIfAborted();
+    return result.list;
+  } finally {
+    const activeSession = session;
+
+    if (activeSession) {
+      await ignoreCleanupFailure(() =>
+        withDeadline(activeSession.disconnect(), 1_000)
+      );
+    }
+
+    await ignoreCleanupFailure(() =>
+      withDeadline(client.deleteSession(sessionId), 1_000)
+    );
+  }
 }
 
 export function buildChildRuntimeEnvironment(
@@ -150,6 +234,14 @@ async function removeTemporaryState(baseDirectory: string) {
   }
 }
 
+async function ignoreCleanupFailure(cleanup: () => Promise<unknown>) {
+  try {
+    await cleanup();
+  } catch {
+    // The enclosing runtime cleanup removes the complete temporary state.
+  }
+}
+
 async function withDeadline<T>(promise: Promise<T>, timeoutMs: number) {
   let timeout: ReturnType<typeof setTimeout> | undefined;
 
@@ -161,7 +253,6 @@ async function withDeadline<T>(promise: Promise<T>, timeoutMs: number) {
           () => reject(new Error("Copilot runtime shutdown timed out.")),
           timeoutMs
         );
-        timeout.unref?.();
       }),
     ]);
   } finally {

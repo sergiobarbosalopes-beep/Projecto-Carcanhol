@@ -175,9 +175,9 @@ docs/architecture.md
 
 O GitHub Models foi retirado em 30 de julho de 2026 e não é usado. O SDK
 GitHub Copilot corre exclusivamente em `services/copilot-worker`, nunca numa
-Route Handler Next.js. Criar uma conta executa `start()` +
-`rpc.models.list({ gitHubToken })` com a identidade submetida antes de gerar o
-`accountId`, cifrar ou persistir.
+Route Handler Next.js. Criar uma conta executa `start()`, cria uma sessão
+efémera com `SessionConfig.gitHubToken` e chama
+`session.rpc.model.list({})` antes de gerar o `accountId`, cifrar ou persistir.
 
 Para o onboarding manual:
 
