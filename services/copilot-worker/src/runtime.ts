@@ -327,6 +327,9 @@ function applyCredentialProbeResult(
     return "unavailable";
   }
 
+  evidence.stringCodes.clear();
+  evidence.statuses.clear();
+
   if (result.outcome === "valid") {
     evidence.stringCodes.add("GITHUB_CREDENTIAL_PROBE_SUCCEEDED");
     evidence.primaryMessage =

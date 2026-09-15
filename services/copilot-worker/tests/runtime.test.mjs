@@ -11,8 +11,10 @@ const token = `github_pat_${"S".repeat(40)}`;
 const sessionBuilderError = {
   name: "ResponseError",
   code: -32603,
+  status: 403,
   message:
     "SDK session authentication failed: network fetch failed: request failed: builder error",
+  data: { code: "UNCLASSIFIED_PROVIDER_CODE" },
 };
 
 test("sanitizes and bounds the official model metadata fields", () => {
