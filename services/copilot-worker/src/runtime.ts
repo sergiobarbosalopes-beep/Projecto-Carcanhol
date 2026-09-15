@@ -55,7 +55,6 @@ export async function validateCopilotCredential({
       timeout = setTimeout(() => {
         controller.abort();
       }, timeoutMs);
-      timeout.unref?.();
     });
     const runtimePromise = createRuntime(token, requestId, controller.signal);
     void runtimePromise.then(
@@ -245,7 +244,6 @@ async function closeRuntime(runtime: CopilotRuntimeClient) {
       runtime.close(),
       new Promise<void>((resolve) => {
         timeout = setTimeout(resolve, 3_000);
-        timeout.unref?.();
       }),
     ]);
   } catch {
