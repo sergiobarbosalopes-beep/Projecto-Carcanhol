@@ -141,6 +141,24 @@ test("maps only explicit error evidence and treats a generic 403 as unknown", ()
   );
   assert.equal(
     classifyCopilotError({
+      name: "ResponseError",
+      code: -32603,
+      message:
+        "SDK session authentication failed: Failed to fetch Copilot user info: 401 Unauthorized",
+    }),
+    "invalid_token"
+  );
+  assert.equal(
+    classifyCopilotError({
+      name: "ResponseError",
+      code: -32603,
+      message:
+        "SDK session authentication failed: Failed to fetch Copilot user info: 500 Internal Server Error",
+    }),
+    "unknown"
+  );
+  assert.equal(
+    classifyCopilotError({
       code: -32603,
       message: "Internal error",
     }),
@@ -190,6 +208,37 @@ test("maps a real listModels authentication rejection and still closes", async (
         throw {
           code: -32603,
           message: "Not authenticated",
+        };
+      },
+      async close() {
+        closed = true;
+      },
+    }),
+    onUnknownError() {
+      diagnosticCalls += 1;
+    },
+  });
+
+  assert.deepEqual(result, { ok: false, requestId, code: "invalid_token" });
+  assert.equal(closed, true);
+  assert.equal(diagnosticCalls, 0);
+  assert.equal(JSON.stringify(result).includes(token), false);
+});
+
+test("maps a session authentication rejection and still closes", async () => {
+  let closed = false;
+  let diagnosticCalls = 0;
+  const result = await validateCopilotCredential({
+    token,
+    requestId,
+    timeoutMs: 100,
+    createRuntime: async () => ({
+      async listModels() {
+        throw {
+          name: "ResponseError",
+          code: -32603,
+          message:
+            "SDK session authentication failed: Failed to fetch Copilot user info: 401 Unauthorized",
         };
       },
       async close() {

@@ -208,7 +208,8 @@ export function classifyCopilotError(
     evidence.rpcErrors.some(
       (rpcError) =>
         rpcError.numericCode === -32603 &&
-        rpcError.message === "not authenticated"
+        (rpcError.message === "not authenticated" ||
+          isSessionAuthenticationUnauthorized(rpcError.message))
     ) ||
     intersects(evidence.classificationCodes, [
       "BAD_CREDENTIALS",
@@ -267,6 +268,15 @@ export function classifyCopilotError(
   }
 
   return "unknown";
+}
+
+function isSessionAuthenticationUnauthorized(message: string | null) {
+  return (
+    message !== null &&
+    message.includes("sdk session authentication failed:") &&
+    message.includes("failed to fetch copilot user info:") &&
+    /\b401 unauthorized\b/.test(message)
+  );
 }
 
 class ValidationTimeoutError extends Error {
