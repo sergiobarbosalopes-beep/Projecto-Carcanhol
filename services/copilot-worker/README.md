@@ -21,11 +21,12 @@ identidade, entitlement, política e modelos. O SDK 1.0.13 não tipa uma
 categoria de erro específica para `models.list`; quando `ResponseError.data`
 traz `code`/status estruturados, estes têm prioridade. Um `ResponseError` sem
 categoria só é classificado como `invalid_token` quando contém a combinação
-conhecida `code=-32603` + `Not authenticated`; mensagens remotas não são
-devolvidas nem registadas.
+conhecida `code=-32603` + `Not authenticated`; mensagens remotas em bruto não
+são devolvidas nem registadas.
 
 Se a classificação final continuar `unknown`, o worker emite uma única linha
-JSON interna, nunca incluída na resposta HTTP ou na base de dados:
+JSON interna e inclui o mesmo objeto já sanitizado no campo opcional
+`diagnostic` da resposta de validação:
 
 ```json
 {
@@ -47,6 +48,12 @@ caracteres allowlisted. A mensagem remove tokens GitHub, URLs, auth headers,
 valores secretos, conteúdo quoted/payloads e sequências de alta entropia. O
 diagnóstico nunca lê ou inclui stack, erro raw, request body, token ou
 environment.
+
+O BFF preserva este campo exclusivamente na resposta autenticada
+`POST /api/admin/llm-accounts/:id/validate` do proprietário. O campo não é
+persistido, não aparece em `GET /api/admin/llm-accounts` e não é renderizado
+por omissão na UI. Respostas com qualquer outro `code` rejeitam
+contratualmente um campo `diagnostic`.
 
 O token chega apenas no body HTTPS assinado, é entregue ao SDK em memória e ao
 child process através da opção oficial `gitHubToken`; nunca é usado em URL,

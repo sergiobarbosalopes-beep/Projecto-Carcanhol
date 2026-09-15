@@ -27,7 +27,7 @@ const server = createCopilotWorkerServer({
       },
     });
 
-    if (!result.ok) {
+    if (!result.ok && result.code !== "unknown") {
       console.warn("Copilot validation failed.", {
         requestId,
         code: result.code,

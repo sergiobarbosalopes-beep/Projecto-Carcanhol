@@ -11,6 +11,7 @@ worker. A cobertura inclui:
 - Redis com claim atómico, reconexão bounded e readiness unhealthy/recovery;
 - schema estrito/CORS fechado e ausência do PAT nas respostas;
 - sanitização de modelos, policy, timeout e error mapping;
+- redaction adversarial, bounds e transporte efémero do diagnóstico `unknown`;
 - invariantes da migration 0005 para transação, sync/stale, stale writes e
   preservação do catálogo em falhas transitórias.
 

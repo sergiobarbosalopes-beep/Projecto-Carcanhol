@@ -163,6 +163,14 @@ test("maps only explicit error evidence and treats a generic 403 as unknown", ()
     "no_subscription"
   );
   assert.equal(
+    classifyCopilotError({
+      code: -32603,
+      message: "Internal error",
+      data: { code: -32603, message: "Not authenticated" },
+    }),
+    "invalid_token"
+  );
+  assert.equal(
     classifyCopilotError({ code: "COPILOT_POLICY_BLOCKED" }),
     "org_policy_blocked"
   );
@@ -222,8 +230,10 @@ test("emits bounded internal diagnostics only for unknown errors", async () => {
     },
   });
 
-  assert.deepEqual(result, { ok: false, requestId, code: "unknown" });
-  assert.equal("diagnostic" in result, false);
+  assert.equal(result.ok, false);
+  assert.equal(result.requestId, requestId);
+  assert.equal(result.code, "unknown");
+  assert.equal(result.diagnostic, diagnostic);
   assert.equal(diagnostic.event, "copilot_validation_unknown_error");
   assert.equal(diagnostic.requestId, requestId);
   assert.equal(diagnostic.error.name, "ResponseError");

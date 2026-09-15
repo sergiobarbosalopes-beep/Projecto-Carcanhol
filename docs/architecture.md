@@ -299,7 +299,16 @@ Worker/container Copilot
 Falhas são reduzidas a `invalid_token`, `no_subscription`,
 `org_policy_blocked`, `timeout`, `unavailable`, `no_models` ou `unknown`.
 Estados específicos só são inferidos de evidência estruturada; um `403`
-genérico fica `unknown`. Mensagens remotas nunca são persistidas/devolvidas.
+genérico fica `unknown`. Mensagens remotas em bruto nunca são
+persistidas/devolvidas.
+
+Para `unknown`, o worker cria um diagnóstico efémero com shape fechado
+(`event`, `requestId`, `error.constructor/name/stringCodes/numericCodes/statuses/message`).
+Antes do fallback textual, privilegia `ResponseError.data.code` e statuses
+estruturados. A mensagem é redigida e limitada; stack, erro raw, token, body e
+environment nunca são lidos. O BFF devolve esse objeto apenas no POST de
+revalidação autenticado do proprietário. Não entra nas RPCs/BD, na listagem de
+contas ou na renderização normal da UI.
 
 O worker expõe apenas `GET /health` e `POST /v1/copilot/validate`, rejeita
 `Origin` e não envia headers CORS. `/health` é readiness: faz `PING` e um

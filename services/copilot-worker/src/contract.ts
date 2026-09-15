@@ -1,4 +1,11 @@
 import { z } from "zod";
+import {
+  MAX_DIAGNOSTIC_IDENTIFIER_LENGTH,
+  MAX_DIAGNOSTIC_ITEMS,
+  MAX_DIAGNOSTIC_MESSAGE_LENGTH,
+  isSafeDiagnosticIdentifier,
+  isSafeDiagnosticMessage,
+} from "./diagnostic-safety";
 
 export const COPILOT_VALIDATION_PATH = "/v1/copilot/validate";
 export const COPILOT_HEALTH_PATH = "/health";
@@ -26,6 +33,58 @@ export const copilotValidationErrorCodes = [
 
 export type CopilotValidationErrorCode =
   (typeof copilotValidationErrorCodes)[number];
+
+const classifiedCopilotValidationErrorCodes = [
+  "invalid_token",
+  "no_subscription",
+  "org_policy_blocked",
+  "timeout",
+  "unavailable",
+  "no_models",
+] as const;
+
+const diagnosticIdentifierSchema = z
+  .string()
+  .min(1)
+  .max(MAX_DIAGNOSTIC_IDENTIFIER_LENGTH)
+  .refine(isSafeDiagnosticIdentifier, {
+    message: "Diagnostic identifiers must not contain secret-like values.",
+  });
+
+const diagnosticMessageSchema = z
+  .string()
+  .min(1)
+  .max(MAX_DIAGNOSTIC_MESSAGE_LENGTH)
+  .refine(isSafeDiagnosticMessage, {
+    message: "Diagnostic messages must already be redacted.",
+  });
+
+export const safeUnknownCopilotErrorDiagnosticSchema = z
+  .object({
+    event: z.literal("copilot_validation_unknown_error"),
+    requestId: z.union([z.string().uuid(), z.literal("unknown")]),
+    error: z
+      .object({
+        constructor: diagnosticIdentifierSchema,
+        name: diagnosticIdentifierSchema,
+        stringCodes: z
+          .array(diagnosticIdentifierSchema)
+          .max(MAX_DIAGNOSTIC_ITEMS),
+        numericCodes: z
+          .array(z.number().int().safe())
+          .max(MAX_DIAGNOSTIC_ITEMS),
+        statuses: z
+          .array(z.number().int().min(100).max(599))
+          .max(MAX_DIAGNOSTIC_ITEMS),
+        message: diagnosticMessageSchema,
+      })
+      .strict(),
+  })
+  .strict();
+
+export type SafeUnknownCopilotErrorDiagnostic = z.infer<
+  typeof safeUnknownCopilotErrorDiagnosticSchema
+>;
 
 const boundedLabelSchema = z
   .string()
@@ -91,17 +150,36 @@ const successfulValidationSchema = z
   })
   .strict();
 
-const failedValidationSchema = z
+const classifiedFailureSchema = z
   .object({
     ok: z.literal(false),
     requestId: z.string().uuid(),
-    code: z.enum(copilotValidationErrorCodes),
+    code: z.enum(classifiedCopilotValidationErrorCodes),
   })
   .strict();
 
-export const copilotValidationResponseSchema = z.discriminatedUnion("ok", [
+const unknownFailureSchema = z
+  .object({
+    ok: z.literal(false),
+    requestId: z.string().uuid(),
+    code: z.literal("unknown"),
+    diagnostic: safeUnknownCopilotErrorDiagnosticSchema.optional(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.diagnostic && value.diagnostic.requestId !== value.requestId) {
+      context.addIssue({
+        code: "custom",
+        path: ["diagnostic", "requestId"],
+        message: "Diagnostic requestId must match the response requestId.",
+      });
+    }
+  });
+
+export const copilotValidationResponseSchema = z.union([
   successfulValidationSchema,
-  failedValidationSchema,
+  classifiedFailureSchema,
+  unknownFailureSchema,
 ]);
 
 export type CopilotValidationResponse = z.infer<

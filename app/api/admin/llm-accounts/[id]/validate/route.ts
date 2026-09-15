@@ -55,10 +55,10 @@ export async function POST(
       );
     }
 
-    const account = await revalidateLlmAccount(user.id, parsedId.data);
+    const validation = await revalidateLlmAccount(user.id, parsedId.data);
 
-    return account
-      ? jsonSuccess({ account })
+    return validation
+      ? jsonSuccess(validation)
       : jsonError("Conta LLM não encontrada.", 404);
   } catch (error) {
     if (error instanceof AuthorizationError) {

@@ -2,13 +2,13 @@ import {
   COPILOT_WORKER_MAX_MODELS,
   copilotModelSchema,
   type CopilotModel,
+  type SafeUnknownCopilotErrorDiagnostic,
   type CopilotValidationErrorCode,
   type CopilotValidationResponse,
 } from "./contract";
 import {
   collectCopilotErrorEvidence,
   createSafeUnknownCopilotErrorDiagnostic,
-  type SafeUnknownCopilotErrorDiagnostic,
 } from "./error-diagnostics";
 
 export type CopilotRuntimeClient = {
@@ -99,18 +99,31 @@ export async function validateCopilotCredential({
   } catch (error) {
     const evidence = collectCopilotErrorEvidence(error);
     const code = classifyCopilotError(error, evidence);
+    let diagnostic: SafeUnknownCopilotErrorDiagnostic | undefined;
 
-    if (code === "unknown" && onUnknownError) {
+    if (code === "unknown") {
       try {
-        onUnknownError(
-          createSafeUnknownCopilotErrorDiagnostic(requestId, error, evidence)
+        diagnostic = createSafeUnknownCopilotErrorDiagnostic(
+          requestId,
+          error,
+          evidence
         );
       } catch {
-        // Diagnostics must never change the sanitized validation result.
+        diagnostic = undefined;
+      }
+
+      if (diagnostic && onUnknownError) {
+        try {
+          onUnknownError(diagnostic);
+        } catch {
+          // Diagnostics must never change the sanitized validation result.
+        }
       }
     }
 
-    return { ok: false, requestId, code };
+    return diagnostic
+      ? { ok: false, requestId, code: "unknown", diagnostic }
+      : { ok: false, requestId, code };
   } finally {
     if (timeout) {
       clearTimeout(timeout);
@@ -197,7 +210,7 @@ export function classifyCopilotError(
         rpcError.numericCode === -32603 &&
         rpcError.message === "not authenticated"
     ) ||
-    intersects(evidence.stringCodes, [
+    intersects(evidence.classificationCodes, [
       "BAD_CREDENTIALS",
       "INVALID_TOKEN",
       "TOKEN_EXPIRED",
@@ -208,7 +221,7 @@ export function classifyCopilotError(
   }
 
   if (
-    intersects(evidence.stringCodes, [
+    intersects(evidence.classificationCodes, [
       "COPILOT_NOT_ENTITLED",
       "NO_COPILOT_SUBSCRIPTION",
       "NO_SUBSCRIPTION",
@@ -218,7 +231,7 @@ export function classifyCopilotError(
   }
 
   if (
-    intersects(evidence.stringCodes, [
+    intersects(evidence.classificationCodes, [
       "COPILOT_POLICY_BLOCKED",
       "ORG_POLICY_BLOCKED",
       "POLICY_BLOCKED",
@@ -228,7 +241,7 @@ export function classifyCopilotError(
   }
 
   if (
-    intersects(evidence.stringCodes, [
+    intersects(evidence.classificationCodes, [
       "ABORT_ERR",
       "ETIMEDOUT",
       "ERR_COPILOT_TIMEOUT",
@@ -240,7 +253,7 @@ export function classifyCopilotError(
   }
 
   if (
-    intersects(evidence.stringCodes, [
+    intersects(evidence.classificationCodes, [
       "ECONNREFUSED",
       "ECONNRESET",
       "EAI_AGAIN",

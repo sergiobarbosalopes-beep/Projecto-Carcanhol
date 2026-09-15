@@ -238,6 +238,10 @@ GitHub Copilot; BYOK é a exceção documentada pelo SDK.
   nonce, auth tag, chave e payloads sensíveis nunca são serializados.
 - Mensagens de validação identificam formatos de token incompatíveis sem
   repetir o valor submetido.
+- Quando `listModels()` termina com `unknown`, a revalidação pode devolver ao
+  proprietário um diagnóstico efémero, estritamente allowlisted/redigido e
+  bounded. Não é persistido, listado nem mostrado por omissão na UI; para os
+  restantes códigos o contrato proíbe esse campo.
 - BFF e worker autenticam cada pedido com HMAC SHA-256 sobre método, path,
   timestamp, request-id e hash do body; o worker usa comparação constant-time,
   janela temporal e Redis partilhado com claim atómico contra replay.

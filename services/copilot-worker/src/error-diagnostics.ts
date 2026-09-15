@@ -1,12 +1,19 @@
+import type { SafeUnknownCopilotErrorDiagnostic } from "./contract";
+import {
+  MAX_DIAGNOSTIC_ITEMS,
+  MAX_INPUT_MESSAGE_LENGTH,
+  isSafeDiagnosticIdentifier,
+  redactCopilotDiagnosticMessage,
+} from "./diagnostic-safety";
+
 const MAX_CAUSE_DEPTH = 4;
-const MAX_DIAGNOSTIC_ITEMS = 8;
-const MAX_DIAGNOSTIC_MESSAGE_LENGTH = 240;
-const MAX_INPUT_MESSAGE_LENGTH = 4_096;
-const MAX_IDENTIFIER_LENGTH = 64;
+
+export { redactCopilotDiagnosticMessage } from "./diagnostic-safety";
 
 export type CopilotErrorEvidence = {
   constructorName: string;
   name: string;
+  classificationCodes: Set<string>;
   stringCodes: Set<string>;
   numericCodes: Set<number>;
   statuses: Set<number>;
@@ -17,25 +24,13 @@ export type CopilotErrorEvidence = {
   primaryMessage: string | null;
 };
 
-export type SafeUnknownCopilotErrorDiagnostic = {
-  event: "copilot_validation_unknown_error";
-  requestId: string;
-  error: {
-    constructor: string;
-    name: string;
-    stringCodes: string[];
-    numericCodes: number[];
-    statuses: number[];
-    message: string;
-  };
-};
-
 export function collectCopilotErrorEvidence(
   error: unknown
 ): CopilotErrorEvidence {
   const evidence: CopilotErrorEvidence = {
     constructorName: safeConstructorName(error),
     name: safeDiagnosticIdentifier(readErrorString(error, "name")),
+    classificationCodes: new Set(),
     stringCodes: new Set(),
     numericCodes: new Set(),
     statuses: new Set(),
@@ -56,7 +51,7 @@ export function collectCopilotErrorEvidence(
     const data = asRecord(readProperty(record, "data"));
 
     if (data) {
-      collectRecordEvidence(data, evidence, false);
+      collectRecordEvidence(data, evidence, true);
     }
 
     current = readProperty(record, "cause");
@@ -84,53 +79,15 @@ export function createSafeUnknownCopilotErrorDiagnostic(
   };
 }
 
-export function redactCopilotDiagnosticMessage(value: unknown): string {
-  if (typeof value !== "string" || value.length > MAX_INPUT_MESSAGE_LENGTH) {
-    return "unavailable";
-  }
-
-  const sanitized = value
-    .replace(
-      /\b(?:authorization|proxy-authorization|x-auth-token|x-github-token|cookie|set-cookie)\s*[:=]\s*[^\r\n,;]*/gi,
-      "[auth]"
-    )
-    .replace(/\b(?:bearer|basic)\s+[A-Za-z0-9+/_=.-]{4,}/gi, "[auth]")
-    .replace(
-      /\b(?:access[_-]?token|api[_-]?key|secret|password)\s*[:=]\s*[^\s,;]*/gi,
-      "[secret]"
-    )
-    .replace(
-      /\b(?:github_pat_|gho_|ghu_|ghp_)[A-Za-z0-9_+=/-]{4,}/gi,
-      "[token]"
-    )
-    .replace(/\b[A-Za-z][A-Za-z0-9+.-]{1,15}:\/\/[^\s<>"'`]+/g, "[url]")
-    .replace(
-      /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`/g,
-      "[quoted]"
-    )
-    .replace(/\{[^{}\r\n]{0,512}\}|\[[^\[\]\r\n]{0,512}\]/g, "[payload]")
-    .replace(
-      /\b[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}(?:\.[A-Za-z0-9_-]{16,})?\b/g,
-      "[opaque]"
-    )
-    .replace(/[A-Za-z0-9+/_=-]{24,}/g, "[opaque]")
-    .replace(/[\u0000-\u001f\u007f]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  if (!sanitized) {
-    return "unavailable";
-  }
-
-  return Array.from(sanitized).slice(0, MAX_DIAGNOSTIC_MESSAGE_LENGTH).join("");
-}
-
 function collectRecordEvidence(
   record: Record<string, unknown>,
   evidence: CopilotErrorEvidence,
   includeRpcPair: boolean
 ) {
   const stringCode = safeDiagnosticCode(readProperty(record, "code"));
+  const classificationCode = safeClassificationCode(
+    readProperty(record, "code")
+  );
   const numericCode = safeInteger(readProperty(record, "code"));
   const status =
     safeStatus(readProperty(record, "status")) ??
@@ -141,6 +98,10 @@ function collectRecordEvidence(
     evidence.stringCodes.add(stringCode);
   }
 
+  if (classificationCode) {
+    evidence.classificationCodes.add(classificationCode);
+  }
+
   if (numericCode !== null) {
     evidence.numericCodes.add(numericCode);
   }
@@ -149,7 +110,15 @@ function collectRecordEvidence(
     evidence.statuses.add(status);
   }
 
-  if (includeRpcPair && evidence.rpcErrors.length < MAX_CAUSE_DEPTH) {
+  if (!evidence.primaryMessage && message) {
+    evidence.primaryMessage = message;
+  }
+
+  if (
+    includeRpcPair &&
+    (numericCode !== null || message) &&
+    evidence.rpcErrors.length < MAX_CAUSE_DEPTH
+  ) {
     evidence.rpcErrors.push({
       numericCode,
       message: message?.toLowerCase() ?? null,
@@ -213,18 +182,7 @@ function safeShortString(value: unknown): string | null {
 }
 
 function safeDiagnosticIdentifier(value: unknown): string {
-  if (
-    typeof value !== "string" ||
-    value.length < 1 ||
-    value.length > MAX_IDENTIFIER_LENGTH ||
-    !/^[A-Za-z][A-Za-z0-9_.:-]*$/.test(value) ||
-    /^(?:github_pat_|gho_|ghu_|ghp_)/i.test(value) ||
-    redactCopilotDiagnosticMessage(value) !== value
-  ) {
-    return "unknown";
-  }
-
-  return value;
+  return isSafeDiagnosticIdentifier(value) ? value : "unknown";
 }
 
 function safeRequestId(value: string): string {
@@ -238,6 +196,15 @@ function safeRequestId(value: string): string {
 function safeDiagnosticCode(value: unknown): string | null {
   const identifier = safeDiagnosticIdentifier(value);
   return identifier === "unknown" ? null : identifier.toUpperCase();
+}
+
+function safeClassificationCode(value: unknown): string | null {
+  return typeof value === "string" &&
+    value.length >= 1 &&
+    value.length <= 64 &&
+    /^[A-Za-z][A-Za-z0-9_.:-]*$/.test(value)
+    ? value.toUpperCase()
+    : null;
 }
 
 function safeInteger(value: unknown): number | null {

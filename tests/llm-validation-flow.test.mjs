@@ -184,3 +184,57 @@ test("LLM cards expose accessible manual and automatic validation states", () =>
   assert.match(panel, /aria-live="polite"/);
   assert.match(panel, /catálogo preservado; conta indisponível/);
 });
+
+test("safe diagnostics are ephemeral and limited to owned revalidation responses", () => {
+  const repository = readFileSync(
+    new URL("../src/admin/llm-accounts.ts", import.meta.url),
+    "utf8"
+  );
+  const provider = readFileSync(
+    new URL("../src/admin/llm-provider-validation.ts", import.meta.url),
+    "utf8"
+  );
+  const validationRoute = readFileSync(
+    new URL(
+      "../app/api/admin/llm-accounts/[id]/validate/route.ts",
+      import.meta.url
+    ),
+    "utf8"
+  );
+  const listRoute = readFileSync(
+    new URL("../app/api/admin/llm-accounts/route.ts", import.meta.url),
+    "utf8"
+  );
+  const types = readFileSync(
+    new URL("../src/types/supabase.ts", import.meta.url),
+    "utf8"
+  );
+  const panel = readFileSync(
+    new URL("../app/(protected)/administracao/llm-panel.tsx", import.meta.url),
+    "utf8"
+  );
+  const migrations = [
+    "0005_github_copilot_validation.sql",
+    "0006_preserve_transient_validation_catalog.sql",
+  ]
+    .map((file) =>
+      readFileSync(
+        new URL(`../database/migrations/${file}`, import.meta.url),
+        "utf8"
+      )
+    )
+    .join("\n");
+
+  assert.match(provider, /result\.code === "unknown" && result\.diagnostic/);
+  assert.match(repository, /diagnostic: validation\.diagnostic/);
+  assert.match(validationRoute, /requireAuthorizedUser/);
+  assert.match(validationRoute, /jsonSuccess\(validation\)/);
+  assert.doesNotMatch(listRoute, /diagnostic/);
+  assert.doesNotMatch(types, /diagnostic/);
+  assert.doesNotMatch(panel, /diagnostic/);
+  assert.doesNotMatch(
+    migrations,
+    /\bp_diagnostic\b|\bdiagnostic\s+(?:jsonb|text)\b/i
+  );
+  assert.doesNotMatch(repository, /p_diagnostic/);
+});

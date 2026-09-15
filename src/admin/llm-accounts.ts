@@ -1,6 +1,7 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
+import type { SafeUnknownCopilotErrorDiagnostic } from "@/services/copilot-worker/src/contract";
 import { AuthorizationError, requireAuthorizedUser } from "@/src/auth/server";
 import {
   getLlmCredentialError,
@@ -37,7 +38,15 @@ const PUBLIC_ACCOUNT_COLUMNS =
 const PUBLIC_MODEL_COLUMNS =
   "id, user_id, account_id, provider_model_id, display_name, enabled, discovery_metadata, is_stale, discovered_at, last_seen_at, created_at, updated_at";
 
-const validationRequests = new Map<string, Promise<LlmAccountPublic | null>>();
+export type RevalidateLlmAccountResult = {
+  account: LlmAccountPublic;
+  diagnostic?: SafeUnknownCopilotErrorDiagnostic;
+};
+
+const validationRequests = new Map<
+  string,
+  Promise<RevalidateLlmAccountResult | null>
+>();
 
 const CREDENTIAL_TYPE_BY_PROVIDER: Record<
   LlmProvider,
@@ -176,7 +185,7 @@ export async function createLlmAccount(
 export async function revalidateLlmAccount(
   userId: string,
   accountId: string
-): Promise<LlmAccountPublic | null> {
+): Promise<RevalidateLlmAccountResult | null> {
   const key = `${userId}:${accountId}`;
   const current = validationRequests.get(key);
 
@@ -197,7 +206,7 @@ export async function revalidateLlmAccount(
 async function revalidateLlmAccountOnce(
   userId: string,
   accountId: string
-): Promise<LlmAccountPublic | null> {
+): Promise<RevalidateLlmAccountResult | null> {
   const client = await createAuthorizedClient(userId);
   const current = await getOwnedAccount(client, userId, accountId);
 
@@ -286,7 +295,18 @@ async function revalidateLlmAccountOnce(
     throw new LlmValidationSupersededError();
   }
 
-  return getOwnedPublicAccount(client, userId, accountId);
+  const account = await getOwnedPublicAccount(client, userId, accountId);
+
+  if (!account) {
+    return null;
+  }
+
+  return {
+    account,
+    ...(!validation.ok && validation.code === "unknown" && validation.diagnostic
+      ? { diagnostic: validation.diagnostic }
+      : {}),
+  };
 }
 
 export async function updateLlmAccount(

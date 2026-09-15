@@ -2,6 +2,7 @@ import "server-only";
 
 import type {
   CopilotModel,
+  SafeUnknownCopilotErrorDiagnostic,
   CopilotValidationErrorCode,
 } from "@/services/copilot-worker/src/contract";
 import { validateWithCopilotWorker } from "@/src/admin/copilot-worker-client";
@@ -12,7 +13,15 @@ export type LlmValidationErrorCode =
 
 export type LlmProviderValidationResult =
   | { ok: true; models: CopilotModel[] }
-  | { ok: false; code: LlmValidationErrorCode };
+  | {
+      ok: false;
+      code: "unknown";
+      diagnostic?: SafeUnknownCopilotErrorDiagnostic;
+    }
+  | {
+      ok: false;
+      code: Exclude<LlmValidationErrorCode, "unknown">;
+    };
 
 type LlmProviderValidator = {
   validate(
@@ -28,7 +37,13 @@ const validators: Partial<Record<LlmProvider, LlmProviderValidator>> = {
 
       return result.ok
         ? { ok: true, models: result.models }
-        : { ok: false, code: result.code };
+        : {
+            ok: false,
+            code: result.code,
+            ...(result.code === "unknown" && result.diagnostic
+              ? { diagnostic: result.diagnostic }
+              : {}),
+          };
     },
   },
 };

@@ -5,6 +5,7 @@ import {
   createSafeUnknownCopilotErrorDiagnostic,
   redactCopilotDiagnosticMessage,
 } from "../dist/error-diagnostics.js";
+import { copilotValidationResponseSchema } from "../dist/contract.js";
 
 const requestId = "d510ccb5-22af-47b5-9280-3b605aac4c68";
 const pat = `github_pat_${"A".repeat(48)}`;
@@ -12,6 +13,16 @@ const oauthToken = `gho_${"B".repeat(40)}`;
 const appToken = `ghu_${"C".repeat(40)}`;
 const classicToken = `ghp_${"D".repeat(40)}`;
 const opaque = "E".repeat(80);
+const separatedOpaque = "AbCdEfGhIjKlMnO.PqRsTuVwXyZaBcD.EfGhIjKlMnOpQrS";
+const colonOpaque = "ab12:cd34:ef56:ab78:cd90:ef12:ab34:cd56";
+const schemeRelativeUrl = "//private.example.internal/path";
+const bareUrl = "www.private.example/internal/path";
+const twoSegmentOpaque = "abcdefghijkl:mnopqrstuvwxyz";
+const threeSegmentOpaque = "abcdefgh:ijklmnop:qrstuvwx";
+const ipv6Url = "2001:db8::1/private";
+const internalHostUrl = "redis-master:6379/private";
+const plusSeparatedOpaque = "abcd+efgh+ijkl:mnop+qrst+uvwx";
+const percentSeparatedOpaque = "abcd%efgh%ijkl:mnop%qrst%uvwx";
 
 test("redacts secrets, URLs, headers, payloads, and opaque sequences", () => {
   const message = [
@@ -40,6 +51,23 @@ test("redacts secrets, URLs, headers, payloads, and opaque sequences", () => {
 
   assert.match(sanitized, /\[(?:auth|url|quoted|opaque)\]/);
   assert.equal(Array.from(sanitized).length <= 240, true);
+
+  for (const unsafe of [
+    separatedOpaque,
+    colonOpaque,
+    schemeRelativeUrl,
+    bareUrl,
+    twoSegmentOpaque,
+    threeSegmentOpaque,
+    ipv6Url,
+    internalHostUrl,
+    plusSeparatedOpaque,
+    percentSeparatedOpaque,
+  ]) {
+    const redacted = redactCopilotDiagnosticMessage(unsafe);
+    assert.notEqual(redacted, unsafe);
+    assert.equal(redacted.includes(unsafe), false);
+  }
 });
 
 test("builds only the bounded allowlisted diagnostic shape", () => {
@@ -61,8 +89,8 @@ test("builds only the bounded allowlisted diagnostic shape", () => {
       code: -32001,
       message: "nested detail",
       cause: {
-        code: opaque,
-        message: "opaque code",
+        code: separatedOpaque,
+        message: schemeRelativeUrl,
       },
     },
   };
@@ -123,4 +151,162 @@ test("handles hostile getters and overlong messages without leaking", () => {
     redactCopilotDiagnosticMessage("safe ".repeat(1_000)),
     "unavailable"
   );
+});
+
+test("allows diagnostics only on correlated unknown responses", () => {
+  const diagnostic = createSafeUnknownCopilotErrorDiagnostic(requestId, {
+    name: "ResponseError",
+    code: -32603,
+    message: "Unexpected internal response",
+  });
+
+  assert.equal(
+    copilotValidationResponseSchema.safeParse({
+      ok: false,
+      requestId,
+      code: "unknown",
+      diagnostic,
+    }).success,
+    true
+  );
+  assert.equal(
+    copilotValidationResponseSchema.safeParse({
+      ok: false,
+      requestId,
+      code: "invalid_token",
+      diagnostic,
+    }).success,
+    false
+  );
+  assert.equal(
+    copilotValidationResponseSchema.safeParse({
+      ok: false,
+      requestId,
+      code: "unknown",
+      diagnostic: {
+        ...diagnostic,
+        requestId: "3bebcccd-5254-40f8-809f-3a14579dba46",
+      },
+    }).success,
+    false
+  );
+  assert.equal(
+    copilotValidationResponseSchema.safeParse({
+      ok: false,
+      requestId,
+      code: "unknown",
+      diagnostic: {
+        ...diagnostic,
+        error: {
+          ...diagnostic.error,
+          message: "x".repeat(241),
+        },
+      },
+    }).success,
+    false
+  );
+  assert.equal(
+    copilotValidationResponseSchema.safeParse({
+      ok: false,
+      requestId,
+      code: "unknown",
+      diagnostic: {
+        ...diagnostic,
+        error: {
+          ...diagnostic.error,
+          name: colonOpaque,
+        },
+      },
+    }).success,
+    false
+  );
+  assert.equal(
+    copilotValidationResponseSchema.safeParse({
+      ok: false,
+      requestId,
+      code: "unknown",
+      diagnostic: {
+        ...diagnostic,
+        error: {
+          ...diagnostic.error,
+          stringCodes: [separatedOpaque],
+        },
+      },
+    }).success,
+    false
+  );
+  assert.equal(
+    copilotValidationResponseSchema.safeParse({
+      ok: false,
+      requestId,
+      code: "unknown",
+      diagnostic: {
+        ...diagnostic,
+        error: {
+          ...diagnostic.error,
+          message: schemeRelativeUrl,
+        },
+      },
+    }).success,
+    false
+  );
+  assert.equal(
+    copilotValidationResponseSchema.safeParse({
+      ok: false,
+      requestId,
+      code: "unknown",
+      diagnostic: {
+        ...diagnostic,
+        error: {
+          ...diagnostic.error,
+          message: bareUrl,
+        },
+      },
+    }).success,
+    false
+  );
+  for (const unsafeMessage of [
+    twoSegmentOpaque,
+    threeSegmentOpaque,
+    ipv6Url,
+    internalHostUrl,
+    plusSeparatedOpaque,
+    percentSeparatedOpaque,
+  ]) {
+    assert.equal(
+      copilotValidationResponseSchema.safeParse({
+        ok: false,
+        requestId,
+        code: "unknown",
+        diagnostic: {
+          ...diagnostic,
+          error: {
+            ...diagnostic.error,
+            message: unsafeMessage,
+          },
+        },
+      }).success,
+      false,
+      unsafeMessage
+    );
+  }
+  for (const unsafeIdentifier of [twoSegmentOpaque, threeSegmentOpaque]) {
+    assert.equal(
+      copilotValidationResponseSchema.safeParse({
+        ok: false,
+        requestId,
+        code: "unknown",
+        diagnostic: {
+          ...diagnostic,
+          error: {
+            ...diagnostic.error,
+            name: unsafeIdentifier,
+            stringCodes: [unsafeIdentifier],
+          },
+        },
+      }).success,
+      false,
+      unsafeIdentifier
+    );
+  }
 });
