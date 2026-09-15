@@ -71,17 +71,7 @@ class CopilotSdkRuntime implements CopilotRuntimeClient {
   ) {}
 
   async listModels(signal: AbortSignal): Promise<readonly ModelInfo[]> {
-    signal.throwIfAborted();
-    const authentication = await this.client.getAuthStatus();
-    signal.throwIfAborted();
-
-    if (!authentication.isAuthenticated) {
-      throw new CopilotAuthenticationError();
-    }
-
-    const models = await this.client.listModels();
-    signal.throwIfAborted();
-    return models;
+    return listModelsAuthoritatively(this.client, signal);
   }
 
   async close() {
@@ -101,8 +91,14 @@ class CopilotSdkRuntime implements CopilotRuntimeClient {
   }
 }
 
-class CopilotAuthenticationError extends Error {
-  readonly code = "INVALID_TOKEN";
+export async function listModelsAuthoritatively(
+  client: Pick<CopilotClient, "listModels">,
+  signal: AbortSignal
+) {
+  signal.throwIfAborted();
+  const models = await client.listModels();
+  signal.throwIfAborted();
+  return models;
 }
 
 export function buildChildRuntimeEnvironment(

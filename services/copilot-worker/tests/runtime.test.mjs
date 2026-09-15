@@ -133,6 +133,24 @@ test("does not infer a policy block from an unconfigured model", async () => {
 test("maps only explicit error evidence and treats a generic 403 as unknown", () => {
   assert.equal(classifyCopilotError({ status: 401 }), "invalid_token");
   assert.equal(
+    classifyCopilotError({
+      code: -32603,
+      message: "Not authenticated",
+    }),
+    "invalid_token"
+  );
+  assert.equal(
+    classifyCopilotError({
+      code: -32603,
+      message: "Internal error",
+    }),
+    "unknown"
+  );
+  assert.equal(
+    classifyCopilotError({ message: "Not authenticated" }),
+    "unknown"
+  );
+  assert.equal(
     classifyCopilotError({ code: "NO_COPILOT_SUBSCRIPTION" }),
     "no_subscription"
   );
@@ -142,6 +160,30 @@ test("maps only explicit error evidence and treats a generic 403 as unknown", ()
   );
   assert.equal(classifyCopilotError({ status: 403 }), "unknown");
   assert.equal(classifyCopilotError({ code: "ENOTFOUND" }), "unavailable");
+});
+
+test("maps a real listModels authentication rejection and still closes", async () => {
+  let closed = false;
+  const result = await validateCopilotCredential({
+    token,
+    requestId,
+    timeoutMs: 100,
+    createRuntime: async () => ({
+      async listModels() {
+        throw {
+          code: -32603,
+          message: "Not authenticated",
+        };
+      },
+      async close() {
+        closed = true;
+      },
+    }),
+  });
+
+  assert.deepEqual(result, { ok: false, requestId, code: "invalid_token" });
+  assert.equal(closed, true);
+  assert.equal(JSON.stringify(result).includes(token), false);
 });
 
 test("returns a sanitized timeout and closes a stalled runtime", async () => {

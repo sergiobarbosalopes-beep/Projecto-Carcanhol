@@ -15,6 +15,13 @@ cliente e não necessita de sessão; por isso não é criada qualquer sessão ne
 existe uma superfície de permission requests. `denyAllPermissions` fica
 exportado como política fail-closed obrigatória para qualquer sessão futura.
 
+`auth.getStatus` não é usado como precondição: pode continuar `false` antes de
+o runtime consumir o token. `listModels()` é a validação autoritativa da
+identidade, entitlement, política e modelos. Um `ResponseError` real só é
+classificado como `invalid_token` quando contém a combinação estruturada
+conhecida `code=-32603` + `Not authenticated`; mensagens remotas não são
+devolvidas nem registadas.
+
 O token chega apenas no body HTTPS assinado, é entregue ao SDK em memória e ao
 child process através da opção oficial `gitHubToken`; nunca é usado em URL,
 log, erro, ficheiro ou telemetria da aplicação. O ambiente do child process é

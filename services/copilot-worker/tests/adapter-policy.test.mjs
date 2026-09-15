@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   buildChildRuntimeEnvironment,
   denyAllPermissions,
+  listModelsAuthoritatively,
 } from "../dist/copilot-adapter.js";
 import {
   assertWorkerEnvironmentIsolated,
@@ -106,9 +107,32 @@ test("pins the SDK and configures empty mode without logged-in fallback", () => 
   assert.match(adapter, /mode: "empty"/);
   assert.match(adapter, /useLoggedInUser: false/);
   assert.match(adapter, /logLevel: "none"/);
-  assert.match(adapter, /getAuthStatus/);
-  assert.match(adapter, /INVALID_TOKEN/);
+  assert.doesNotMatch(adapter, /getAuthStatus/);
   assert.doesNotMatch(adapter, /approveAll/);
+});
+
+test("uses listModels even when a stale auth status would be false", async () => {
+  let authStatusCalls = 0;
+  let listModelsCalls = 0;
+  const client = {
+    async getAuthStatus() {
+      authStatusCalls += 1;
+      return { isAuthenticated: false };
+    },
+    async listModels() {
+      listModelsCalls += 1;
+      return [{ id: "gpt-5", name: "GPT-5" }];
+    },
+  };
+
+  const models = await listModelsAuthoritatively(
+    client,
+    new AbortController().signal
+  );
+
+  assert.equal(authStatusCalls, 0);
+  assert.equal(listModelsCalls, 1);
+  assert.equal(models[0].id, "gpt-5");
 });
 
 test("uses an atomic Redis nonce claim with expiry", () => {

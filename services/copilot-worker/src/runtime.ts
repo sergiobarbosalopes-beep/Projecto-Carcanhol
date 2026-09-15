@@ -173,6 +173,8 @@ export function classifyCopilotError(
 
   if (
     evidence.statuses.has(401) ||
+    (evidence.numericCodes.has(-32603) &&
+      evidence.messages.has("not authenticated")) ||
     intersects(evidence.codes, [
       "BAD_CREDENTIALS",
       "INVALID_TOKEN",
@@ -258,6 +260,8 @@ async function closeRuntime(runtime: CopilotRuntimeClient) {
 
 function collectErrorEvidence(error: unknown) {
   const codes = new Set<string>();
+  const numericCodes = new Set<number>();
+  const messages = new Set<string>();
   const statuses = new Set<number>();
   let current: unknown = error;
 
@@ -269,10 +273,20 @@ function collectErrorEvidence(error: unknown) {
     }
 
     const code = safeString(record.code);
+    const numericCode = safeInteger(record.code);
+    const message = safeString(record.message);
     const status = safeStatus(record.status) ?? safeStatus(record.statusCode);
 
     if (code) {
       codes.add(code.toUpperCase());
+    }
+
+    if (numericCode !== null) {
+      numericCodes.add(numericCode);
+    }
+
+    if (message) {
+      messages.add(message.toLowerCase());
     }
 
     if (status) {
@@ -282,7 +296,7 @@ function collectErrorEvidence(error: unknown) {
     current = record.cause;
   }
 
-  return { codes, statuses };
+  return { codes, messages, numericCodes, statuses };
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -326,6 +340,10 @@ function safeStatus(value: unknown): number | null {
   return Number.isInteger(value) && Number(value) >= 100 && Number(value) <= 599
     ? Number(value)
     : null;
+}
+
+function safeInteger(value: unknown): number | null {
+  return Number.isSafeInteger(value) ? Number(value) : null;
 }
 
 function safePolicyState(
