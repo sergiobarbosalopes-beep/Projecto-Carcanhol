@@ -5,6 +5,11 @@ import {
   type CopilotValidationErrorCode,
   type CopilotValidationResponse,
 } from "./contract";
+import {
+  collectCopilotErrorEvidence,
+  createSafeUnknownCopilotErrorDiagnostic,
+  type SafeUnknownCopilotErrorDiagnostic,
+} from "./error-diagnostics";
 
 export type CopilotRuntimeClient = {
   listModels(signal: AbortSignal): Promise<readonly unknown[]>;
@@ -23,12 +28,14 @@ export async function validateCopilotCredential({
   timeoutMs,
   createRuntime,
   signal,
+  onUnknownError,
 }: {
   token: string;
   requestId: string;
   timeoutMs: number;
   createRuntime: CopilotRuntimeFactory;
   signal?: AbortSignal;
+  onUnknownError?: (diagnostic: SafeUnknownCopilotErrorDiagnostic) => void;
 }): Promise<CopilotValidationResponse> {
   const controller = new AbortController();
   let runtime: CopilotRuntimeClient | null = null;
@@ -90,7 +97,20 @@ export async function validateCopilotCredential({
 
     return { ok: true, requestId, models };
   } catch (error) {
-    return { ok: false, requestId, code: classifyCopilotError(error) };
+    const evidence = collectCopilotErrorEvidence(error);
+    const code = classifyCopilotError(error, evidence);
+
+    if (code === "unknown" && onUnknownError) {
+      try {
+        onUnknownError(
+          createSafeUnknownCopilotErrorDiagnostic(requestId, error, evidence)
+        );
+      } catch {
+        // Diagnostics must never change the sanitized validation result.
+      }
+    }
+
+    return { ok: false, requestId, code };
   } finally {
     if (timeout) {
       clearTimeout(timeout);
@@ -163,19 +183,21 @@ export function sanitizeCopilotModels(
 }
 
 export function classifyCopilotError(
-  error: unknown
+  error: unknown,
+  evidence = collectCopilotErrorEvidence(error)
 ): CopilotValidationErrorCode {
   if (error instanceof ValidationTimeoutError) {
     return "timeout";
   }
 
-  const evidence = collectErrorEvidence(error);
-
   if (
     evidence.statuses.has(401) ||
-    (evidence.numericCodes.has(-32603) &&
-      evidence.messages.has("not authenticated")) ||
-    intersects(evidence.codes, [
+    evidence.rpcErrors.some(
+      (rpcError) =>
+        rpcError.numericCode === -32603 &&
+        rpcError.message === "not authenticated"
+    ) ||
+    intersects(evidence.stringCodes, [
       "BAD_CREDENTIALS",
       "INVALID_TOKEN",
       "TOKEN_EXPIRED",
@@ -186,7 +208,7 @@ export function classifyCopilotError(
   }
 
   if (
-    intersects(evidence.codes, [
+    intersects(evidence.stringCodes, [
       "COPILOT_NOT_ENTITLED",
       "NO_COPILOT_SUBSCRIPTION",
       "NO_SUBSCRIPTION",
@@ -196,7 +218,7 @@ export function classifyCopilotError(
   }
 
   if (
-    intersects(evidence.codes, [
+    intersects(evidence.stringCodes, [
       "COPILOT_POLICY_BLOCKED",
       "ORG_POLICY_BLOCKED",
       "POLICY_BLOCKED",
@@ -206,7 +228,7 @@ export function classifyCopilotError(
   }
 
   if (
-    intersects(evidence.codes, [
+    intersects(evidence.stringCodes, [
       "ABORT_ERR",
       "ETIMEDOUT",
       "ERR_COPILOT_TIMEOUT",
@@ -218,7 +240,7 @@ export function classifyCopilotError(
   }
 
   if (
-    intersects(evidence.codes, [
+    intersects(evidence.stringCodes, [
       "ECONNREFUSED",
       "ECONNRESET",
       "EAI_AGAIN",
@@ -258,47 +280,6 @@ async function closeRuntime(runtime: CopilotRuntimeClient) {
   }
 }
 
-function collectErrorEvidence(error: unknown) {
-  const codes = new Set<string>();
-  const numericCodes = new Set<number>();
-  const messages = new Set<string>();
-  const statuses = new Set<number>();
-  let current: unknown = error;
-
-  for (let depth = 0; depth < 4 && current; depth += 1) {
-    const record = asRecord(current);
-
-    if (!record) {
-      break;
-    }
-
-    const code = safeString(record.code);
-    const numericCode = safeInteger(record.code);
-    const message = safeString(record.message);
-    const status = safeStatus(record.status) ?? safeStatus(record.statusCode);
-
-    if (code) {
-      codes.add(code.toUpperCase());
-    }
-
-    if (numericCode !== null) {
-      numericCodes.add(numericCode);
-    }
-
-    if (message) {
-      messages.add(message.toLowerCase());
-    }
-
-    if (status) {
-      statuses.add(status);
-    }
-
-    current = record.cause;
-  }
-
-  return { codes, messages, numericCodes, statuses };
-}
-
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null
     ? (value as Record<string, unknown>)
@@ -334,16 +315,6 @@ function safeNonNegativeNumber(value: unknown): number | undefined {
     value <= 1_000_000
     ? value
     : undefined;
-}
-
-function safeStatus(value: unknown): number | null {
-  return Number.isInteger(value) && Number(value) >= 100 && Number(value) <= 599
-    ? Number(value)
-    : null;
-}
-
-function safeInteger(value: unknown): number | null {
-  return Number.isSafeInteger(value) ? Number(value) : null;
 }
 
 function safePolicyState(

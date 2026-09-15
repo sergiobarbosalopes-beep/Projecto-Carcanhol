@@ -17,10 +17,36 @@ exportado como política fail-closed obrigatória para qualquer sessão futura.
 
 `auth.getStatus` não é usado como precondição: pode continuar `false` antes de
 o runtime consumir o token. `listModels()` é a validação autoritativa da
-identidade, entitlement, política e modelos. Um `ResponseError` real só é
-classificado como `invalid_token` quando contém a combinação estruturada
+identidade, entitlement, política e modelos. O SDK 1.0.13 não tipa uma
+categoria de erro específica para `models.list`; quando `ResponseError.data`
+traz `code`/status estruturados, estes têm prioridade. Um `ResponseError` sem
+categoria só é classificado como `invalid_token` quando contém a combinação
 conhecida `code=-32603` + `Not authenticated`; mensagens remotas não são
 devolvidas nem registadas.
+
+Se a classificação final continuar `unknown`, o worker emite uma única linha
+JSON interna, nunca incluída na resposta HTTP ou na base de dados:
+
+```json
+{
+  "event": "copilot_validation_unknown_error",
+  "requestId": "<uuid>",
+  "error": {
+    "constructor": "ResponseError",
+    "name": "ResponseError",
+    "stringCodes": [],
+    "numericCodes": [-32603],
+    "statuses": [],
+    "message": "<redacted, max 240 chars>"
+  }
+}
+```
+
+Cada lista tem no máximo oito itens e nomes/códigos têm no máximo 64
+caracteres allowlisted. A mensagem remove tokens GitHub, URLs, auth headers,
+valores secretos, conteúdo quoted/payloads e sequências de alta entropia. O
+diagnóstico nunca lê ou inclui stack, erro raw, request body, token ou
+environment.
 
 O token chega apenas no body HTTPS assinado, é entregue ao SDK em memória e ao
 child process através da opção oficial `gitHubToken`; nunca é usado em URL,

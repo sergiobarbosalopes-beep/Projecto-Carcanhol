@@ -155,6 +155,14 @@ test("maps only explicit error evidence and treats a generic 403 as unknown", ()
     "no_subscription"
   );
   assert.equal(
+    classifyCopilotError({
+      code: -32603,
+      message: "Internal error",
+      data: { code: "NO_COPILOT_SUBSCRIPTION" },
+    }),
+    "no_subscription"
+  );
+  assert.equal(
     classifyCopilotError({ code: "COPILOT_POLICY_BLOCKED" }),
     "org_policy_blocked"
   );
@@ -164,6 +172,7 @@ test("maps only explicit error evidence and treats a generic 403 as unknown", ()
 
 test("maps a real listModels authentication rejection and still closes", async () => {
   let closed = false;
+  let diagnosticCalls = 0;
   const result = await validateCopilotCredential({
     token,
     requestId,
@@ -179,11 +188,49 @@ test("maps a real listModels authentication rejection and still closes", async (
         closed = true;
       },
     }),
+    onUnknownError() {
+      diagnosticCalls += 1;
+    },
   });
 
   assert.deepEqual(result, { ok: false, requestId, code: "invalid_token" });
   assert.equal(closed, true);
+  assert.equal(diagnosticCalls, 0);
   assert.equal(JSON.stringify(result).includes(token), false);
+});
+
+test("emits bounded internal diagnostics only for unknown errors", async () => {
+  let diagnostic;
+  const result = await validateCopilotCredential({
+    token,
+    requestId,
+    timeoutMs: 100,
+    createRuntime: async () => ({
+      async listModels() {
+        throw {
+          name: "ResponseError",
+          code: -32603,
+          status: 418,
+          message: `Unexpected response for ${token} at https://example.com`,
+          stack: token,
+        };
+      },
+      async close() {},
+    }),
+    onUnknownError(value) {
+      diagnostic = value;
+    },
+  });
+
+  assert.deepEqual(result, { ok: false, requestId, code: "unknown" });
+  assert.equal("diagnostic" in result, false);
+  assert.equal(diagnostic.event, "copilot_validation_unknown_error");
+  assert.equal(diagnostic.requestId, requestId);
+  assert.equal(diagnostic.error.name, "ResponseError");
+  assert.deepEqual(diagnostic.error.numericCodes, [-32603]);
+  assert.deepEqual(diagnostic.error.statuses, [418]);
+  assert.equal(JSON.stringify(diagnostic).includes(token), false);
+  assert.equal(JSON.stringify(diagnostic).includes("example.com"), false);
 });
 
 test("returns a sanitized timeout and closes a stalled runtime", async () => {
