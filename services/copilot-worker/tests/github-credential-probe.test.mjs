@@ -49,7 +49,7 @@ test("probes only the fixed GitHub user endpoint without reading the response", 
     }
   );
 
-  assert.deepEqual(result, { outcome: "valid", status: 200 });
+  assert.deepEqual(result, { outcome: "valid" });
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, "https://api.github.com/user");
   assert.equal(calls[0].init.method, "GET");
@@ -88,7 +88,7 @@ test("maps only the GitHub status without exposing response data", async () => {
       async () => ({ status })
     );
 
-    assert.deepEqual(result, { outcome, status });
+    assert.deepEqual(result, { outcome });
     assert.equal(JSON.stringify(result).includes(token), false);
   }
 });
@@ -102,18 +102,21 @@ test("maps probe failures without reflecting thrown details", async () => {
       throw new Error(`network failed for ${token}`);
     }
   );
-  assert.deepEqual(networkResult, { outcome: "unavailable", status: null });
+  assert.deepEqual(networkResult, { outcome: "unavailable" });
   assert.equal(JSON.stringify(networkResult).includes(token), false);
 
   const aborted = new AbortController();
   aborted.abort();
+  let fetchCalls = 0;
   const timeoutResult = await probeGitHubCredential(
     token,
     aborted.signal,
     async () => {
+      fetchCalls += 1;
       throw new Error(`aborted for ${token}`);
     }
   );
-  assert.deepEqual(timeoutResult, { outcome: "timeout", status: null });
+  assert.deepEqual(timeoutResult, { outcome: "timeout" });
+  assert.equal(fetchCalls, 0);
   assert.equal(JSON.stringify(timeoutResult).includes(token), false);
 });

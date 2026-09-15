@@ -281,7 +281,7 @@ test("uses the fixed credential probe only for the exact session builder error",
       probeCalls += 1;
       assert.equal(receivedToken, token);
       assert.equal(signal.aborted, false);
-      return { outcome: "valid", status: 200 };
+      return { outcome: "valid" };
     },
   });
 
@@ -290,7 +290,7 @@ test("uses the fixed credential probe only for the exact session builder error",
   assert.deepEqual(result.diagnostic.error.stringCodes, [
     "GITHUB_CREDENTIAL_PROBE_SUCCEEDED",
   ]);
-  assert.deepEqual(result.diagnostic.error.statuses, [200]);
+  assert.deepEqual(result.diagnostic.error.statuses, []);
   assert.equal(
     result.diagnostic.error.message,
     "github credential probe succeeded; Copilot runtime transport failed"
@@ -314,7 +314,7 @@ test("uses the fixed credential probe only for the exact session builder error",
     }),
     async probeCredential() {
       probeCalls += 1;
-      return { outcome: "invalid_token", status: 401 };
+      return { outcome: "invalid_token" };
     },
   });
 
@@ -338,42 +338,82 @@ test("uses the fixed credential probe only for the exact session builder error",
     }),
     async probeCredential() {
       probeCalls += 1;
-      return { outcome: "valid", status: 200 };
+      return { outcome: "valid" };
     },
   });
 
   assert.equal(authenticationResult.ok, false);
   assert.equal(authenticationResult.code, "invalid_token");
   assert.equal(probeCalls, 1);
+
+  const wrappedResult = await validateCopilotCredential({
+    token,
+    requestId,
+    timeoutMs: 100,
+    createRuntime: async () => ({
+      async listModels() {
+        throw {
+          code: -32603,
+          message: `Request session.create failed with message: ${sessionBuilderError.message}`,
+        };
+      },
+      async close() {},
+    }),
+    async probeCredential() {
+      probeCalls += 1;
+      return { outcome: "forbidden" };
+    },
+  });
+
+  assert.equal(wrappedResult.ok, false);
+  assert.equal(wrappedResult.code, "unknown");
+  assert.deepEqual(wrappedResult.diagnostic.error.stringCodes, [
+    "GITHUB_CREDENTIAL_PROBE_FORBIDDEN",
+  ]);
+  assert.deepEqual(wrappedResult.diagnostic.error.statuses, []);
+  assert.equal(
+    wrappedResult.diagnostic.error.message,
+    "github credential probe forbidden; Copilot runtime transport failed"
+  );
+  assert.equal(probeCalls, 2);
 });
 
 test("maps credential probe outcomes without inferring entitlement", async () => {
   const cases = [
     {
-      probeResult: { outcome: "invalid_token", status: 401 },
+      probeResult: { outcome: "invalid_token" },
       expectedCode: "invalid_token",
     },
     {
-      probeResult: { outcome: "forbidden", status: 403 },
+      probeResult: { outcome: "forbidden" },
       expectedCode: "unknown",
       expectedDiagnosticCode: "GITHUB_CREDENTIAL_PROBE_FORBIDDEN",
+      expectedMessage:
+        "github credential probe forbidden; Copilot runtime transport failed",
     },
     {
-      probeResult: { outcome: "timeout", status: null },
+      probeResult: { outcome: "timeout" },
       expectedCode: "timeout",
     },
     {
-      probeResult: { outcome: "unavailable", status: null },
+      probeResult: { outcome: "unavailable" },
       expectedCode: "unavailable",
     },
     {
-      probeResult: { outcome: "unknown", status: 422 },
+      probeResult: { outcome: "unknown" },
       expectedCode: "unknown",
       expectedDiagnosticCode: "GITHUB_CREDENTIAL_PROBE_UNEXPECTED_STATUS",
+      expectedMessage:
+        "github credential probe returned an unexpected status; Copilot runtime transport failed",
     },
   ];
 
-  for (const { probeResult, expectedCode, expectedDiagnosticCode } of cases) {
+  for (const {
+    probeResult,
+    expectedCode,
+    expectedDiagnosticCode,
+    expectedMessage,
+  } of cases) {
     const result = await validateCopilotCredential({
       token,
       requestId,
@@ -396,6 +436,8 @@ test("maps credential probe outcomes without inferring entitlement", async () =>
         result.diagnostic?.error.stringCodes.includes(expectedDiagnosticCode),
         true
       );
+      assert.deepEqual(result.diagnostic?.error.statuses, []);
+      assert.equal(result.diagnostic?.error.message, expectedMessage);
     } else {
       assert.equal(result.diagnostic, undefined);
     }

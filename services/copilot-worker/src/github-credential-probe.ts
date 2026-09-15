@@ -12,7 +12,6 @@ export type GitHubCredentialProbeOutcome =
 
 export type GitHubCredentialProbeResult = {
   outcome: GitHubCredentialProbeOutcome;
-  status: number | null;
 };
 
 export type GitHubCredentialProbe = (
@@ -25,6 +24,10 @@ export async function probeGitHubCredential(
   signal: AbortSignal,
   fetchImplementation: typeof fetch = fetch
 ): Promise<GitHubCredentialProbeResult> {
+  if (signal.aborted) {
+    return { outcome: "timeout" };
+  }
+
   try {
     const response = await fetchImplementation(GITHUB_USER_URL, {
       method: "GET",
@@ -40,30 +43,29 @@ export async function probeGitHubCredential(
     const status = response.status;
 
     if (status === 200) {
-      return { outcome: "valid", status };
+      return { outcome: "valid" };
     }
 
     if (status === 401) {
-      return { outcome: "invalid_token", status };
+      return { outcome: "invalid_token" };
     }
 
     if (status === 403) {
-      return { outcome: "forbidden", status };
+      return { outcome: "forbidden" };
     }
 
     if (status === 408 || status === 504) {
-      return { outcome: "timeout", status };
+      return { outcome: "timeout" };
     }
 
     if (status === 429 || (status >= 500 && status <= 599)) {
-      return { outcome: "unavailable", status };
+      return { outcome: "unavailable" };
     }
 
-    return { outcome: "unknown", status };
+    return { outcome: "unknown" };
   } catch {
     return {
       outcome: signal.aborted ? "timeout" : "unavailable",
-      status: null,
     };
   }
 }

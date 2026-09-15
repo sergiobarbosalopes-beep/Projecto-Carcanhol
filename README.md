@@ -200,7 +200,8 @@ a autenticação da sessão, o worker faz um probe bounded à URL fixa
 `https://api.github.com/user`. Apenas o status é usado: o body e os headers da
 resposta não são lidos. Um `200` não afirma entitlement Copilot e mantém o
 resultado `unknown`; `401` identifica credencial inválida; `403` permanece
-inconclusivo.
+inconclusivo. Outcomes inconclusivos usam apenas códigos e mensagens locais
+fixos, sem transportar status, body ou headers.
 
 O SDK também suporta tokens de utilizador OAuth `gho_` e GitHub App `ghu_`,
 mas estes tipos estão apenas preparados no schema e são rejeitados pelo

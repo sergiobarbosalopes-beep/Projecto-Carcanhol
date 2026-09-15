@@ -311,12 +311,15 @@ do SDK `-32603` com a mensagem exata de autenticação de sessão terminada em
 `network fetch failed: request failed: builder error`. Dentro do mesmo
 deadline, o worker consulta a URL fixa `https://api.github.com/user`, com
 Bearer em memória, `Accept` e `User-Agent` fixos e redirects rejeitados. Apenas
-o status é observado; body e headers nunca são lidos. `200` confirma somente a
-credencial GitHub e mantém o resultado Copilot como `unknown`, com código
-diagnóstico seguro; `401` é `invalid_token`; `403` não é interpretado como
-falta de subscrição; timeout/rede/`5xx` são transitórios. Outros erros nunca
-acionam o probe. Não se alterou a herança de proxy/CA do child runtime sem
-evidência adicional.
+o status é observado; body e headers nunca são lidos ou transportados. `200`
+confirma somente a credencial GitHub e mantém o resultado Copilot como
+`unknown`, com `GITHUB_CREDENTIAL_PROBE_SUCCEEDED`; `401` é `invalid_token`;
+`403` permanece `unknown` com `GITHUB_CREDENTIAL_PROBE_FORBIDDEN`, sem inferir
+subscrição; outros status inconclusivos usam
+`GITHUB_CREDENTIAL_PROBE_UNEXPECTED_STATUS`. Estes códigos e mensagens são
+fixos e não incluem o status. Timeout/rede/`5xx` são transitórios. Outros erros
+nunca acionam o probe. Não se alterou a herança de proxy/CA do child runtime
+sem evidência adicional.
 
 Para `unknown`, o worker cria um diagnóstico efémero com shape fechado
 (`event`, `requestId`, `error.constructor/name/stringCodes/numericCodes/statuses/message`).

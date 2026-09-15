@@ -14,7 +14,6 @@ import {
 import {
   probeGitHubCredential,
   type GitHubCredentialProbe,
-  type GitHubCredentialProbeResult,
 } from "./github-credential-probe";
 
 export type CopilotRuntimeClient = {
@@ -301,16 +300,19 @@ function isSessionAuthenticationUnauthorized(message: string | null) {
 }
 
 function isSessionAuthenticationBuilderError(evidence: CopilotErrorEvidence) {
+  const message =
+    "sdk session authentication failed: network fetch failed: request failed: builder error";
+
   return evidence.rpcErrors.some(
     (rpcError) =>
       rpcError.numericCode === -32603 &&
-      rpcError.message ===
-        "sdk session authentication failed: network fetch failed: request failed: builder error"
+      (rpcError.message === message ||
+        rpcError.message?.endsWith(`: ${message}`) === true)
   );
 }
 
 function applyCredentialProbeResult(
-  result: GitHubCredentialProbeResult,
+  result: Awaited<ReturnType<GitHubCredentialProbe>>,
   evidence: CopilotErrorEvidence
 ): CopilotValidationErrorCode {
   if (result.outcome === "invalid_token") {
@@ -325,10 +327,6 @@ function applyCredentialProbeResult(
     return "unavailable";
   }
 
-  if (result.status !== null && result.status >= 100 && result.status <= 599) {
-    evidence.statuses.add(result.status);
-  }
-
   if (result.outcome === "valid") {
     evidence.stringCodes.add("GITHUB_CREDENTIAL_PROBE_SUCCEEDED");
     evidence.primaryMessage =
@@ -336,7 +334,7 @@ function applyCredentialProbeResult(
   } else if (result.outcome === "forbidden") {
     evidence.stringCodes.add("GITHUB_CREDENTIAL_PROBE_FORBIDDEN");
     evidence.primaryMessage =
-      "github credential probe returned 403; Copilot authorization remains unknown";
+      "github credential probe forbidden; Copilot runtime transport failed";
   } else {
     evidence.stringCodes.add("GITHUB_CREDENTIAL_PROBE_UNEXPECTED_STATUS");
     evidence.primaryMessage =

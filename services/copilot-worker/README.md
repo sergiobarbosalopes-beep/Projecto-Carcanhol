@@ -37,8 +37,11 @@ com URL, `Accept` e `User-Agent` fixos, `redirect: "error"` e o mesmo
 `AbortSignal` do prazo global. Só consulta o status: nunca lê body ou headers.
 `200` mantém `unknown` e acrescenta ao diagnóstico seguro
 `GITHUB_CREDENTIAL_PROBE_SUCCEEDED`; `401` produz `invalid_token`; `403`
-mantém `unknown`; timeout, rate limit, erro de rede e `5xx` permanecem falhas
-transitórias. Nenhum outro erro ativa este probe.
+mantém `unknown` com `GITHUB_CREDENTIAL_PROBE_FORBIDDEN`; qualquer outro
+status inconclusivo usa `GITHUB_CREDENTIAL_PROBE_UNEXPECTED_STATUS`. Os
+diagnósticos usam mensagens fixas e não incluem status, body ou headers.
+Timeout, rate limit, erro de rede e `5xx` permanecem falhas transitórias.
+Nenhum outro erro ativa este probe.
 
 Se a classificação final continuar `unknown`, o worker emite uma única linha
 JSON interna e inclui o mesmo objeto já sanitizado no campo opcional
