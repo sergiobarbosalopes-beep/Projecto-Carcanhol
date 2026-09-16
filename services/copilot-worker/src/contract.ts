@@ -16,12 +16,13 @@ export {
 export const COPILOT_VALIDATION_PATH = "/v1/copilot/validate";
 export const COPILOT_INFERENCE_PATH = "/v1/copilot/infer";
 export const COPILOT_HEALTH_PATH = "/health";
-export const COPILOT_WORKER_MAX_BODY_BYTES = 8 * 1024;
-export const COPILOT_WORKER_MAX_RESPONSE_BYTES = 256 * 1024;
+export const COPILOT_WORKER_MAX_BODY_BYTES = 24 * 1024;
+export const COPILOT_WORKER_MAX_RESPONSE_BYTES = 512 * 1024;
 export const COPILOT_WORKER_MAX_MODELS = 100;
 export const COPILOT_TOKEN_MAX_LENGTH = 4096;
-export const COPILOT_INFERENCE_MAX_PROMPT_LENGTH = 500;
-export const COPILOT_INFERENCE_MAX_TEXT_LENGTH = 4_096;
+export const COPILOT_INFERENCE_MAX_PROMPT_LENGTH = 8_000;
+export const COPILOT_INFERENCE_MAX_SYSTEM_PROMPT_LENGTH = 8_000;
+export const COPILOT_INFERENCE_MAX_TEXT_LENGTH = 110_000;
 export const COPILOT_QUOTA_ERROR_CODES = [
   "provider_quota_unavailable",
   "provider_quota_not_available",
@@ -522,6 +523,12 @@ export const copilotInferenceRequestSchema = z
       .regex(/^github_pat_[A-Za-z0-9_]{20,255}$/),
     model: boundedLabelSchema,
     prompt: copilotInferencePromptSchema,
+    systemPrompt: z
+      .string()
+      .trim()
+      .min(1)
+      .max(COPILOT_INFERENCE_MAX_SYSTEM_PROMPT_LENGTH)
+      .optional(),
   })
   .strict();
 

@@ -124,9 +124,17 @@ export function createCopilotInferenceWorkerHttpClient({
     token: string,
     model: string,
     prompt: string,
-    requestId: string
+    requestId: string,
+    systemPrompt?: string,
+    signal?: AbortSignal
   ): Promise<CopilotInferenceWorkerClientResult> {
-    let body = JSON.stringify({ requestId, token, model, prompt });
+    let body = JSON.stringify({
+      requestId,
+      token,
+      model,
+      prompt,
+      ...(systemPrompt ? { systemPrompt } : {}),
+    });
     const headers = createSignedWorkerHeaders({
       body,
       method: "POST",
@@ -142,7 +150,9 @@ export function createCopilotInferenceWorkerHttpClient({
         cache: "no-store",
         credentials: "omit",
         redirect: "error",
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: signal
+          ? AbortSignal.any([AbortSignal.timeout(timeoutMs), signal])
+          : AbortSignal.timeout(timeoutMs),
         headers: {
           ...headers,
           Accept: "application/json",

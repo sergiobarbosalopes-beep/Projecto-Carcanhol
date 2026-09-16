@@ -33,7 +33,7 @@ test("BFF inference client signs trusted model input and rejects oversized outpu
         JSON.stringify({
           ok: true,
           requestId,
-          text: "x".repeat(4_097),
+          text: "x".repeat(110_001),
           durationMs: 1,
         }),
         { status: 200 }
@@ -44,11 +44,13 @@ test("BFF inference client signs trusted model input and rejects oversized outpu
     token,
     "claude-haiku-4.5",
     "Qual é a capital de Portugal?",
-    requestId
+    requestId,
+    "Responde apenas com JSON."
   );
 
   assert.equal(requests[0].model, "claude-haiku-4.5");
   assert.equal(requests[0].prompt, "Qual é a capital de Portugal?");
+  assert.equal(requests[0].systemPrompt, "Responde apenas com JSON.");
   assert.equal(result.ok, false);
   assert.equal(result.code, "unknown");
   assert.equal(JSON.stringify(result).includes(token), false);

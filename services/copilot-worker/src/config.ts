@@ -35,8 +35,8 @@ const workerEnvSchema = z.object({
     .number()
     .int()
     .min(5_000)
-    .max(25_000)
-    .default(20_000),
+    .max(55_000)
+    .default(45_000),
   COPILOT_WORKER_CLOCK_SKEW_MS: z.coerce
     .number()
     .int()
