@@ -117,8 +117,8 @@ const copilotWorkerEnvSchema = z.object({
     .number()
     .int()
     .min(25_000)
-    .max(60_000)
-    .default(30_000),
+    .max(90_000)
+    .default(60_000),
 });
 
 /** Environment variables that are safe to expose to the browser. */

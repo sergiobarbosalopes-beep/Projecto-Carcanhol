@@ -125,7 +125,7 @@ docs/architecture.md
    LLM_CREDENTIAL_ENCRYPTION_KEY_VERSION=1
    COPILOT_WORKER_URL=https://copilot-worker.internal.example
    COPILOT_WORKER_HMAC_SECRET=base64-for-32-to-64-random-bytes
-   COPILOT_WORKER_TIMEOUT_MS=30000
+   COPILOT_WORKER_TIMEOUT_MS=60000
    ```
 
    O valor normal é `carcanhol`; deployments de preview isolados podem usar

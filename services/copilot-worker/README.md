@@ -178,7 +178,7 @@ Variáveis:
 | `COPILOT_WORKER_HMAC_SECRET`      | sim         | base64 canónico de 32–64 bytes; igual no BFF      |
 | `PORT`                            | não         | `3000` por omissão; Vercel injeta `$PORT`         |
 | `COPILOT_VALIDATION_TIMEOUT_MS`   | não         | 1–15 s, omissão 15 s                              |
-| `COPILOT_INFERENCE_TIMEOUT_MS`    | não         | 5–25 s, omissão 20 s                              |
+| `COPILOT_INFERENCE_TIMEOUT_MS`    | não         | 5–55 s, omissão 45 s                              |
 | `COPILOT_WORKER_CLOCK_SKEW_MS`    | não         | 5–120 s, omissão 30 s                             |
 | `COPILOT_WORKER_MAX_CONCURRENCY`  | não         | 1–8, omissão 2                                    |
 | `COPILOT_WORKER_MAX_QUEUE`        | não         | 0–100, omissão 8                                  |
@@ -186,8 +186,8 @@ Variáveis:
 | `COPILOT_REPLAY_REDIS_PREFIX`     | não         | prefixo isolado das nonces                        |
 | `COPILOT_REPLAY_STORE_TIMEOUT_MS` | não         | timeout Redis, omissão 1 s                        |
 
-O BFF aceita 25–60 s (`COPILOT_WORKER_TIMEOUT_MS`, 30 s por omissão). O worker
-aceita no máximo 15 s para validação e 25 s para inferência; os valores
+O BFF aceita 25–90 s (`COPILOT_WORKER_TIMEOUT_MS`, 60 s por omissão). O worker
+aceita no máximo 15 s para validação e 55 s para inferência; os valores
 predefinidos deixam margem para cleanup e latência da resposta.
 
 Teste real, sempre opt-in:

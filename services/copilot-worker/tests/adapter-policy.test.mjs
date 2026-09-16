@@ -152,6 +152,18 @@ test("requires a shared replay store in production", () => {
       ),
     /Invalid Copilot worker environment variables/
   );
+  assert.equal(
+    parseWorkerConfig(baseEnvironment).COPILOT_INFERENCE_TIMEOUT_MS,
+    45_000
+  );
+  assert.throws(
+    () =>
+      parseWorkerConfig({
+        ...baseEnvironment,
+        COPILOT_INFERENCE_TIMEOUT_MS: "55001",
+      }),
+    /Invalid Copilot worker environment variables/
+  );
 });
 
 test("pins the SDK and configures empty mode without logged-in fallback", () => {
