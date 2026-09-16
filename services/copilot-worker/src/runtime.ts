@@ -2,6 +2,8 @@ import {
   COPILOT_WORKER_MAX_MODELS,
   copilotModelSchema,
   type CopilotModel,
+  type SafeCopilotUnavailableDiagnostic,
+  type SafeCopilotValidationDiagnostic,
   type SafeUnknownCopilotErrorDiagnostic,
   type CopilotValidationErrorCode,
   type CopilotValidationResponse,
@@ -34,7 +36,7 @@ export async function validateCopilotCredential({
   createRuntime,
   probeCredential = probeGitHubCredential,
   signal,
-  onUnknownError,
+  onDiagnostic,
 }: {
   token: string;
   requestId: string;
@@ -42,7 +44,7 @@ export async function validateCopilotCredential({
   createRuntime: CopilotRuntimeFactory;
   probeCredential?: GitHubCredentialProbe;
   signal?: AbortSignal;
-  onUnknownError?: (diagnostic: SafeUnknownCopilotErrorDiagnostic) => void;
+  onDiagnostic?: (diagnostic: SafeCopilotValidationDiagnostic) => void;
 }): Promise<CopilotValidationResponse> {
   const controller = new AbortController();
   let runtime: CopilotRuntimeClient | null = null;
@@ -107,7 +109,8 @@ export async function validateCopilotCredential({
   } catch (error) {
     const evidence = collectCopilotErrorEvidence(error);
     let code = classifyCopilotError(error, evidence);
-    let diagnostic: SafeUnknownCopilotErrorDiagnostic | undefined;
+    let unknownDiagnostic: SafeUnknownCopilotErrorDiagnostic | undefined;
+    let unavailableDiagnostic: SafeCopilotUnavailableDiagnostic | undefined;
 
     if (code === "unknown" && isSessionAuthenticationBuilderError(evidence)) {
       try {
@@ -115,35 +118,65 @@ export async function validateCopilotCredential({
           probeCredential(token, controller.signal),
           timedOut,
         ]);
-        code = applyCredentialProbeResult(probeResult, evidence);
+        const resolution = applyCredentialProbeResult(
+          requestId,
+          probeResult,
+          evidence
+        );
+        code = resolution.code;
+        unavailableDiagnostic = resolution.diagnostic;
       } catch {
         code = controller.signal.aborted ? "timeout" : "unavailable";
+        unavailableDiagnostic = controller.signal.aborted
+          ? undefined
+          : createProbeUnavailableDiagnostic(requestId, {
+              outcome: "unavailable",
+              category: "network_error",
+            });
       }
     }
 
     if (code === "unknown") {
       try {
-        diagnostic = createSafeUnknownCopilotErrorDiagnostic(
+        unknownDiagnostic = createSafeUnknownCopilotErrorDiagnostic(
           requestId,
           error,
           evidence
         );
       } catch {
-        diagnostic = undefined;
-      }
-
-      if (diagnostic && onUnknownError) {
-        try {
-          onUnknownError(diagnostic);
-        } catch {
-          // Diagnostics must never change the sanitized validation result.
-        }
+        unknownDiagnostic = undefined;
       }
     }
 
-    return diagnostic
-      ? { ok: false, requestId, code: "unknown", diagnostic }
-      : { ok: false, requestId, code };
+    const diagnostic = unknownDiagnostic ?? unavailableDiagnostic;
+
+    if (diagnostic && onDiagnostic) {
+      try {
+        onDiagnostic(diagnostic);
+      } catch {
+        // Diagnostics must never change the sanitized validation result.
+      }
+    }
+
+    if (code === "unknown" && unknownDiagnostic) {
+      return {
+        ok: false,
+        requestId,
+        code,
+        diagnostic: unknownDiagnostic,
+      };
+    }
+
+    if (code === "unavailable" && unavailableDiagnostic) {
+      return {
+        ok: false,
+        requestId,
+        code,
+        diagnostic: unavailableDiagnostic,
+      };
+    }
+
+    return { ok: false, requestId, code };
   } finally {
     if (timeout) {
       clearTimeout(timeout);
@@ -311,20 +344,34 @@ function isSessionAuthenticationBuilderError(evidence: CopilotErrorEvidence) {
   );
 }
 
+type CredentialProbeResolution =
+  | {
+      code: Exclude<CopilotValidationErrorCode, "unavailable">;
+      diagnostic?: never;
+    }
+  | {
+      code: "unavailable";
+      diagnostic: SafeCopilotUnavailableDiagnostic;
+    };
+
 function applyCredentialProbeResult(
+  requestId: string,
   result: Awaited<ReturnType<GitHubCredentialProbe>>,
   evidence: CopilotErrorEvidence
-): CopilotValidationErrorCode {
+): CredentialProbeResolution {
   if (result.outcome === "invalid_token") {
-    return "invalid_token";
+    return { code: "invalid_token" };
   }
 
   if (result.outcome === "timeout") {
-    return "timeout";
+    return { code: "timeout" };
   }
 
   if (result.outcome === "unavailable") {
-    return "unavailable";
+    return {
+      code: "unavailable",
+      diagnostic: createProbeUnavailableDiagnostic(requestId, result),
+    };
   }
 
   evidence.stringCodes.clear();
@@ -344,7 +391,43 @@ function applyCredentialProbeResult(
       "github credential probe returned an unexpected status; Copilot runtime transport failed";
   }
 
-  return "unknown";
+  return { code: "unknown" };
+}
+
+function createProbeUnavailableDiagnostic(
+  requestId: string,
+  result: Extract<
+    Awaited<ReturnType<GitHubCredentialProbe>>,
+    { outcome: "unavailable" }
+  >
+): SafeCopilotUnavailableDiagnostic {
+  const base = {
+    event: "copilot_validation_probe_unavailable" as const,
+    requestId,
+  };
+
+  if (result.category === "network_error") {
+    return {
+      ...base,
+      code: "GITHUB_CREDENTIAL_PROBE_NETWORK_ERROR",
+      message: "github credential probe could not reach GitHub",
+      ...(result.causeCode ? { causeCode: result.causeCode } : {}),
+    };
+  }
+
+  if (result.category === "rate_limited") {
+    return {
+      ...base,
+      code: "GITHUB_CREDENTIAL_PROBE_RATE_LIMITED",
+      message: "github credential probe was rate limited",
+    };
+  }
+
+  return {
+    ...base,
+    code: "GITHUB_CREDENTIAL_PROBE_GITHUB_UNAVAILABLE",
+    message: "github credential probe found GitHub unavailable",
+  };
 }
 
 class ValidationTimeoutError extends Error {

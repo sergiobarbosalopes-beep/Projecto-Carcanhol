@@ -2,6 +2,7 @@ import "server-only";
 
 import type {
   CopilotModel,
+  SafeCopilotUnavailableDiagnostic,
   SafeUnknownCopilotErrorDiagnostic,
   CopilotValidationErrorCode,
 } from "@/services/copilot-worker/src/contract";
@@ -20,7 +21,12 @@ export type LlmProviderValidationResult =
     }
   | {
       ok: false;
-      code: Exclude<LlmValidationErrorCode, "unknown">;
+      code: "unavailable";
+      diagnostic?: SafeCopilotUnavailableDiagnostic;
+    }
+  | {
+      ok: false;
+      code: Exclude<LlmValidationErrorCode, "unknown" | "unavailable">;
     };
 
 type LlmProviderValidator = {
@@ -35,15 +41,27 @@ const validators: Partial<Record<LlmProvider, LlmProviderValidator>> = {
     async validate(credential, requestId) {
       const result = await validateWithCopilotWorker(credential, requestId);
 
-      return result.ok
-        ? { ok: true, models: result.models }
-        : {
-            ok: false,
-            code: result.code,
-            ...(result.code === "unknown" && result.diagnostic
-              ? { diagnostic: result.diagnostic }
-              : {}),
-          };
+      if (result.ok) {
+        return { ok: true, models: result.models };
+      }
+
+      if (result.code === "unknown") {
+        return {
+          ok: false,
+          code: result.code,
+          ...(result.diagnostic ? { diagnostic: result.diagnostic } : {}),
+        };
+      }
+
+      if (result.code === "unavailable") {
+        return {
+          ok: false,
+          code: result.code,
+          ...(result.diagnostic ? { diagnostic: result.diagnostic } : {}),
+        };
+      }
+
+      return { ok: false, code: result.code };
     },
   },
 };

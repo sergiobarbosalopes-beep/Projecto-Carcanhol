@@ -22,7 +22,7 @@ const server = createCopilotWorkerServer({
       timeoutMs: config.COPILOT_VALIDATION_TIMEOUT_MS,
       createRuntime: createCopilotSdkRuntime,
       signal,
-      onUnknownError: (diagnostic) => {
+      onDiagnostic: (diagnostic) => {
         console.warn(JSON.stringify(diagnostic));
       },
     });

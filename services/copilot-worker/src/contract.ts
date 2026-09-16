@@ -39,9 +39,21 @@ const classifiedCopilotValidationErrorCodes = [
   "no_subscription",
   "org_policy_blocked",
   "timeout",
-  "unavailable",
   "no_models",
 ] as const;
+
+export const githubCredentialProbeNetworkCauseCodes = [
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "CERT_HAS_EXPIRED",
+  "SELF_SIGNED_CERT_IN_CHAIN",
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+] as const;
+
+export type GitHubCredentialProbeNetworkCauseCode =
+  (typeof githubCredentialProbeNetworkCauseCodes)[number];
 
 const diagnosticIdentifierSchema = z
   .string()
@@ -85,6 +97,46 @@ export const safeUnknownCopilotErrorDiagnosticSchema = z
 export type SafeUnknownCopilotErrorDiagnostic = z.infer<
   typeof safeUnknownCopilotErrorDiagnosticSchema
 >;
+
+const probeUnavailableDiagnosticBase = {
+  event: z.literal("copilot_validation_probe_unavailable"),
+  requestId: z.string().uuid(),
+};
+
+export const safeCopilotUnavailableDiagnosticSchema = z.discriminatedUnion(
+  "code",
+  [
+    z
+      .object({
+        ...probeUnavailableDiagnosticBase,
+        code: z.literal("GITHUB_CREDENTIAL_PROBE_NETWORK_ERROR"),
+        message: z.literal("github credential probe could not reach GitHub"),
+        causeCode: z.enum(githubCredentialProbeNetworkCauseCodes).optional(),
+      })
+      .strict(),
+    z
+      .object({
+        ...probeUnavailableDiagnosticBase,
+        code: z.literal("GITHUB_CREDENTIAL_PROBE_RATE_LIMITED"),
+        message: z.literal("github credential probe was rate limited"),
+      })
+      .strict(),
+    z
+      .object({
+        ...probeUnavailableDiagnosticBase,
+        code: z.literal("GITHUB_CREDENTIAL_PROBE_GITHUB_UNAVAILABLE"),
+        message: z.literal("github credential probe found GitHub unavailable"),
+      })
+      .strict(),
+  ]
+);
+
+export type SafeCopilotUnavailableDiagnostic = z.infer<
+  typeof safeCopilotUnavailableDiagnosticSchema
+>;
+
+export type SafeCopilotValidationDiagnostic =
+  SafeUnknownCopilotErrorDiagnostic | SafeCopilotUnavailableDiagnostic;
 
 const boundedLabelSchema = z
   .string()
@@ -176,10 +228,29 @@ const unknownFailureSchema = z
     }
   });
 
+const unavailableFailureSchema = z
+  .object({
+    ok: z.literal(false),
+    requestId: z.string().uuid(),
+    code: z.literal("unavailable"),
+    diagnostic: safeCopilotUnavailableDiagnosticSchema.optional(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.diagnostic && value.diagnostic.requestId !== value.requestId) {
+      context.addIssue({
+        code: "custom",
+        path: ["diagnostic", "requestId"],
+        message: "Diagnostic requestId must match the response requestId.",
+      });
+    }
+  });
+
 export const copilotValidationResponseSchema = z.union([
   successfulValidationSchema,
   classifiedFailureSchema,
   unknownFailureSchema,
+  unavailableFailureSchema,
 ]);
 
 export type CopilotValidationResponse = z.infer<

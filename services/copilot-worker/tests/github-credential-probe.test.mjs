@@ -71,39 +71,97 @@ test("probes only the fixed GitHub user endpoint without reading the response", 
 
 test("maps only the GitHub status without exposing response data", async () => {
   const cases = [
-    [200, "valid"],
-    [401, "invalid_token"],
-    [403, "forbidden"],
-    [408, "timeout"],
-    [429, "unavailable"],
-    [500, "unavailable"],
-    [504, "timeout"],
-    [422, "unknown"],
+    [200, { outcome: "valid" }],
+    [401, { outcome: "invalid_token" }],
+    [403, { outcome: "forbidden" }],
+    [408, { outcome: "timeout" }],
+    [429, { outcome: "unavailable", category: "rate_limited" }],
+    [500, { outcome: "unavailable", category: "github_unavailable" }],
+    [504, { outcome: "timeout" }],
+    [422, { outcome: "unknown" }],
   ];
 
-  for (const [status, outcome] of cases) {
+  for (const [status, expected] of cases) {
     const result = await probeGitHubCredential(
       token,
       new AbortController().signal,
       async () => ({ status })
     );
 
-    assert.deepEqual(result, { outcome });
+    assert.deepEqual(result, expected);
     assert.equal(JSON.stringify(result).includes(token), false);
   }
 });
 
-test("maps probe failures without reflecting thrown details", async () => {
+test("allowlists network cause codes without reflecting thrown details", async () => {
   const activeSignal = new AbortController().signal;
-  const networkResult = await probeGitHubCredential(
+  const allowedCodes = [
+    "ENOTFOUND",
+    "EAI_AGAIN",
+    "ECONNRESET",
+    "ETIMEDOUT",
+    "CERT_HAS_EXPIRED",
+    "SELF_SIGNED_CERT_IN_CHAIN",
+    "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  ];
+
+  for (const causeCode of allowedCodes) {
+    const networkResult = await probeGitHubCredential(
+      token,
+      activeSignal,
+      async () => {
+        throw {
+          message: `network failed for ${token}`,
+          cause: {
+            code: causeCode.toLowerCase(),
+            body: token,
+          },
+        };
+      }
+    );
+    assert.deepEqual(networkResult, {
+      outcome: "unavailable",
+      category: "network_error",
+      causeCode,
+    });
+    assert.equal(JSON.stringify(networkResult).includes(token), false);
+  }
+
+  const unclassifiedResult = await probeGitHubCredential(
     token,
     activeSignal,
     async () => {
-      throw new Error(`network failed for ${token}`);
+      throw { code: token, message: token };
     }
   );
-  assert.deepEqual(networkResult, { outcome: "unavailable" });
-  assert.equal(JSON.stringify(networkResult).includes(token), false);
+  assert.deepEqual(unclassifiedResult, {
+    outcome: "unavailable",
+    category: "network_error",
+  });
+  assert.equal(JSON.stringify(unclassifiedResult).includes(token), false);
+
+  let inspectedProperties = 0;
+  const hostileResult = await probeGitHubCredential(
+    token,
+    activeSignal,
+    async () => {
+      throw new Proxy(
+        {},
+        {
+          get() {
+            inspectedProperties += 1;
+            throw new Error(token);
+          },
+        }
+      );
+    }
+  );
+  assert.deepEqual(hostileResult, {
+    outcome: "unavailable",
+    category: "network_error",
+  });
+  assert.equal(inspectedProperties <= 2, true);
+  assert.equal(JSON.stringify(hostileResult).includes(token), false);
 
   const aborted = new AbortController();
   aborted.abort();

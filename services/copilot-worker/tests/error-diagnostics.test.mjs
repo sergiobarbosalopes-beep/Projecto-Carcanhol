@@ -153,7 +153,7 @@ test("handles hostile getters and overlong messages without leaking", () => {
   );
 });
 
-test("allows diagnostics only on correlated unknown responses", () => {
+test("allows generic diagnostics only on correlated unknown responses", () => {
   const diagnostic = createSafeUnknownCopilotErrorDiagnostic(requestId, {
     name: "ResponseError",
     code: -32603,
@@ -309,4 +309,72 @@ test("allows diagnostics only on correlated unknown responses", () => {
       unsafeIdentifier
     );
   }
+});
+
+test("allows only fixed probe diagnostics on unavailable responses", () => {
+  const networkDiagnostic = {
+    event: "copilot_validation_probe_unavailable",
+    requestId,
+    code: "GITHUB_CREDENTIAL_PROBE_NETWORK_ERROR",
+    message: "github credential probe could not reach GitHub",
+    causeCode: "SELF_SIGNED_CERT_IN_CHAIN",
+  };
+
+  assert.equal(
+    copilotValidationResponseSchema.safeParse({
+      ok: false,
+      requestId,
+      code: "unavailable",
+      diagnostic: networkDiagnostic,
+    }).success,
+    true
+  );
+  assert.equal(
+    copilotValidationResponseSchema.safeParse({
+      ok: false,
+      requestId,
+      code: "unavailable",
+    }).success,
+    true
+  );
+
+  for (const diagnostic of [
+    {
+      ...networkDiagnostic,
+      requestId: "3bebcccd-5254-40f8-809f-3a14579dba46",
+    },
+    { ...networkDiagnostic, causeCode: "UND_ERR_CONNECT_TIMEOUT" },
+    { ...networkDiagnostic, status: 503 },
+    {
+      ...networkDiagnostic,
+      message: "network failed at https://api.github.com/user",
+    },
+    {
+      event: "copilot_validation_probe_unavailable",
+      requestId,
+      code: "GITHUB_CREDENTIAL_PROBE_RATE_LIMITED",
+      message: "github credential probe was rate limited",
+      causeCode: "ETIMEDOUT",
+    },
+  ]) {
+    assert.equal(
+      copilotValidationResponseSchema.safeParse({
+        ok: false,
+        requestId,
+        code: "unavailable",
+        diagnostic,
+      }).success,
+      false
+    );
+  }
+
+  assert.equal(
+    copilotValidationResponseSchema.safeParse({
+      ok: false,
+      requestId,
+      code: "unknown",
+      diagnostic: networkDiagnostic,
+    }).success,
+    false
+  );
 });

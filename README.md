@@ -203,6 +203,11 @@ resultado `unknown`; `401` identifica credencial inválida; `403` permanece
 inconclusivo. Outcomes inconclusivos usam apenas códigos e mensagens locais
 fixos, sem transportar status, body ou headers.
 
+Se o próprio probe falhar, a revalidação mantém `unavailable` e pode devolver
+ao proprietário apenas uma categoria fixa de rede, rate limit ou
+indisponibilidade GitHub. Só a categoria de rede admite um cause code de uma
+allowlist curta; não são transportados status, body, headers ou texto remoto.
+
 O SDK também suporta tokens de utilizador OAuth `gho_` e GitHub App `ghu_`,
 mas estes tipos estão apenas preparados no schema e são rejeitados pelo
 formulário manual. OAuth/GitHub App user-to-server será a opção recomendada
@@ -247,10 +252,11 @@ GitHub Copilot; BYOK é a exceção documentada pelo SDK.
   nonce, auth tag, chave e payloads sensíveis nunca são serializados.
 - Mensagens de validação identificam formatos de token incompatíveis sem
   repetir o valor submetido.
-- Quando a listagem de modelos termina com `unknown`, a revalidação pode devolver ao
-  proprietário um diagnóstico efémero, estritamente allowlisted/redigido e
-  bounded. Não é persistido, listado nem mostrado por omissão na UI; para os
-  restantes códigos o contrato proíbe esse campo.
+- Quando a listagem de modelos termina com `unknown`, ou o probe exato termina
+  em `unavailable`, a revalidação pode devolver ao proprietário um diagnóstico
+  efémero estritamente allowlisted/redigido e bounded. Não é persistido,
+  listado nem mostrado por omissão na UI; para os restantes códigos o contrato
+  proíbe esse campo.
 - BFF e worker autenticam cada pedido com HMAC SHA-256 sobre método, path,
   timestamp, request-id e hash do body; o worker usa comparação constant-time,
   janela temporal e Redis partilhado com claim atómico contra replay.

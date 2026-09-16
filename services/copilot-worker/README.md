@@ -62,6 +62,23 @@ JSON interna e inclui o mesmo objeto já sanitizado no campo opcional
 }
 ```
 
+Quando o probe exato falha de forma transitória, `code` continua
+`unavailable`, mas pode transportar apenas um diagnóstico estrito com
+`event = copilot_validation_probe_unavailable` e um destes códigos/mensagens
+fixos:
+
+- `GITHUB_CREDENTIAL_PROBE_NETWORK_ERROR` /
+  `github credential probe could not reach GitHub`;
+- `GITHUB_CREDENTIAL_PROBE_RATE_LIMITED` /
+  `github credential probe was rate limited`;
+- `GITHUB_CREDENTIAL_PROBE_GITHUB_UNAVAILABLE` /
+  `github credential probe found GitHub unavailable`.
+
+Só o primeiro pode incluir `causeCode`, limitado a `ENOTFOUND`, `EAI_AGAIN`,
+`ECONNRESET`, `ETIMEDOUT`, `CERT_HAS_EXPIRED`,
+`SELF_SIGNED_CERT_IN_CHAIN` ou `UNABLE_TO_VERIFY_LEAF_SIGNATURE`. O
+diagnóstico não contém status, body, headers ou detalhe remoto.
+
 Cada lista tem no máximo oito itens e nomes/códigos têm no máximo 64
 caracteres allowlisted. A mensagem remove tokens GitHub, URLs, auth headers,
 valores secretos, conteúdo quoted/payloads e sequências de alta entropia. O
@@ -71,8 +88,9 @@ environment.
 O BFF preserva este campo exclusivamente na resposta autenticada
 `POST /api/admin/llm-accounts/:id/validate` do proprietário. O campo não é
 persistido, não aparece em `GET /api/admin/llm-accounts` e não é renderizado
-por omissão na UI. Respostas com qualquer outro `code` rejeitam
-contratualmente um campo `diagnostic`.
+por omissão na UI. Apenas `unknown` aceita o diagnóstico genérico e apenas
+`unavailable` aceita o diagnóstico estrito do probe; os restantes códigos
+rejeitam contratualmente o campo.
 
 O token chega apenas no body HTTPS assinado e é entregue ao SDK em memória
 como `SessionConfig.gitHubToken`; nunca é usado em URL, log, erro, ficheiro ou

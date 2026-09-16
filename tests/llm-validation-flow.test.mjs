@@ -225,8 +225,11 @@ test("safe diagnostics are ephemeral and limited to owned revalidation responses
     )
     .join("\n");
 
-  assert.match(provider, /result\.code === "unknown" && result\.diagnostic/);
+  assert.match(provider, /result\.code === "unknown"/);
+  assert.match(provider, /result\.code === "unavailable"/);
+  assert.match(provider, /result\.diagnostic/);
   assert.match(repository, /diagnostic: validation\.diagnostic/);
+  assert.match(repository, /validation\.code === "unavailable"/);
   assert.match(validationRoute, /requireAuthorizedUser/);
   assert.match(validationRoute, /jsonSuccess\(validation\)/);
   assert.doesNotMatch(listRoute, /diagnostic/);

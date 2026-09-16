@@ -222,7 +222,7 @@ test("maps a real listModels authentication rejection and still closes", async (
         closed = true;
       },
     }),
-    onUnknownError() {
+    onDiagnostic() {
       diagnosticCalls += 1;
     },
   });
@@ -253,7 +253,7 @@ test("maps a session authentication rejection and still closes", async () => {
         closed = true;
       },
     }),
-    onUnknownError() {
+    onDiagnostic() {
       diagnosticCalls += 1;
     },
   });
@@ -398,8 +398,39 @@ test("maps credential probe outcomes without inferring entitlement", async () =>
       expectedCode: "timeout",
     },
     {
-      probeResult: { outcome: "unavailable" },
+      probeResult: {
+        outcome: "unavailable",
+        category: "network_error",
+        causeCode: "EAI_AGAIN",
+      },
       expectedCode: "unavailable",
+      expectedUnavailableDiagnostic: {
+        event: "copilot_validation_probe_unavailable",
+        requestId,
+        code: "GITHUB_CREDENTIAL_PROBE_NETWORK_ERROR",
+        message: "github credential probe could not reach GitHub",
+        causeCode: "EAI_AGAIN",
+      },
+    },
+    {
+      probeResult: { outcome: "unavailable", category: "rate_limited" },
+      expectedCode: "unavailable",
+      expectedUnavailableDiagnostic: {
+        event: "copilot_validation_probe_unavailable",
+        requestId,
+        code: "GITHUB_CREDENTIAL_PROBE_RATE_LIMITED",
+        message: "github credential probe was rate limited",
+      },
+    },
+    {
+      probeResult: { outcome: "unavailable", category: "github_unavailable" },
+      expectedCode: "unavailable",
+      expectedUnavailableDiagnostic: {
+        event: "copilot_validation_probe_unavailable",
+        requestId,
+        code: "GITHUB_CREDENTIAL_PROBE_GITHUB_UNAVAILABLE",
+        message: "github credential probe found GitHub unavailable",
+      },
     },
     {
       probeResult: { outcome: "unknown" },
@@ -415,7 +446,9 @@ test("maps credential probe outcomes without inferring entitlement", async () =>
     expectedCode,
     expectedDiagnosticCode,
     expectedMessage,
+    expectedUnavailableDiagnostic,
   } of cases) {
+    let emittedDiagnostic;
     const result = await validateCopilotCredential({
       token,
       requestId,
@@ -429,22 +462,60 @@ test("maps credential probe outcomes without inferring entitlement", async () =>
       async probeCredential() {
         return probeResult;
       },
+      onDiagnostic(value) {
+        emittedDiagnostic = value;
+      },
     });
 
     assert.equal(result.ok, false);
     assert.equal(result.code, expectedCode);
-    if (expectedDiagnosticCode) {
+    if (expectedUnavailableDiagnostic) {
+      assert.deepEqual(result.diagnostic, expectedUnavailableDiagnostic);
+      assert.deepEqual(emittedDiagnostic, expectedUnavailableDiagnostic);
+      assert.equal("status" in result.diagnostic, false);
+      assert.equal("body" in result.diagnostic, false);
+      assert.equal("headers" in result.diagnostic, false);
+    } else if (expectedDiagnosticCode) {
       assert.equal(
         result.diagnostic?.error.stringCodes.includes(expectedDiagnosticCode),
         true
       );
       assert.deepEqual(result.diagnostic?.error.statuses, []);
       assert.equal(result.diagnostic?.error.message, expectedMessage);
+      assert.deepEqual(emittedDiagnostic, result.diagnostic);
     } else {
       assert.equal(result.diagnostic, undefined);
+      assert.equal(emittedDiagnostic, undefined);
     }
     assert.equal(JSON.stringify(result).includes(token), false);
   }
+});
+
+test("does not probe or diagnose generic unavailable failures", async () => {
+  let probeCalls = 0;
+  let diagnosticCalls = 0;
+  const result = await validateCopilotCredential({
+    token,
+    requestId,
+    timeoutMs: 100,
+    createRuntime: async () => ({
+      async listModels() {
+        throw { code: "ENOTFOUND" };
+      },
+      async close() {},
+    }),
+    async probeCredential() {
+      probeCalls += 1;
+      return { outcome: "unavailable", category: "network_error" };
+    },
+    onDiagnostic() {
+      diagnosticCalls += 1;
+    },
+  });
+
+  assert.deepEqual(result, { ok: false, requestId, code: "unavailable" });
+  assert.equal(probeCalls, 0);
+  assert.equal(diagnosticCalls, 0);
 });
 
 test("fails closed when an injected credential probe throws", async () => {
@@ -463,7 +534,17 @@ test("fails closed when an injected credential probe throws", async () => {
     },
   });
 
-  assert.deepEqual(result, { ok: false, requestId, code: "unavailable" });
+  assert.deepEqual(result, {
+    ok: false,
+    requestId,
+    code: "unavailable",
+    diagnostic: {
+      event: "copilot_validation_probe_unavailable",
+      requestId,
+      code: "GITHUB_CREDENTIAL_PROBE_NETWORK_ERROR",
+      message: "github credential probe could not reach GitHub",
+    },
+  });
   assert.equal(JSON.stringify(result).includes(token), false);
 });
 
@@ -485,7 +566,7 @@ test("emits bounded internal diagnostics only for unknown errors", async () => {
       },
       async close() {},
     }),
-    onUnknownError(value) {
+    onDiagnostic(value) {
       diagnostic = value;
     },
   });

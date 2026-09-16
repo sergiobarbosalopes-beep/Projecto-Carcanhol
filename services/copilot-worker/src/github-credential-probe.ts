@@ -1,3 +1,8 @@
+import {
+  githubCredentialProbeNetworkCauseCodes,
+  type GitHubCredentialProbeNetworkCauseCode,
+} from "./contract";
+
 const GITHUB_USER_URL = "https://api.github.com/user";
 const GITHUB_ACCEPT = "application/vnd.github+json";
 const GITHUB_USER_AGENT = "Projecto-Carcanhol-Copilot-Worker";
@@ -10,9 +15,15 @@ export type GitHubCredentialProbeOutcome =
   | "unavailable"
   | "unknown";
 
-export type GitHubCredentialProbeResult = {
-  outcome: GitHubCredentialProbeOutcome;
-};
+export type GitHubCredentialProbeResult =
+  | {
+      outcome: Exclude<GitHubCredentialProbeOutcome, "unavailable">;
+    }
+  | {
+      outcome: "unavailable";
+      category: "network_error" | "rate_limited" | "github_unavailable";
+      causeCode?: GitHubCredentialProbeNetworkCauseCode;
+    };
 
 export type GitHubCredentialProbe = (
   token: string,
@@ -59,13 +70,72 @@ export async function probeGitHubCredential(
     }
 
     if (status === 429 || (status >= 500 && status <= 599)) {
-      return { outcome: "unavailable" };
+      return {
+        outcome: "unavailable",
+        category: status === 429 ? "rate_limited" : "github_unavailable",
+      };
     }
 
     return { outcome: "unknown" };
-  } catch {
+  } catch (error) {
+    if (signal.aborted) {
+      return { outcome: "timeout" };
+    }
+
+    const causeCode = findAllowedNetworkCauseCode(error);
+
     return {
-      outcome: signal.aborted ? "timeout" : "unavailable",
+      outcome: "unavailable",
+      category: "network_error",
+      ...(causeCode ? { causeCode } : {}),
     };
+  }
+}
+
+function findAllowedNetworkCauseCode(
+  error: unknown
+): GitHubCredentialProbeNetworkCauseCode | undefined {
+  let current = error;
+
+  for (let depth = 0; depth < 4 && current; depth += 1) {
+    const record = asRecord(current);
+
+    if (!record) {
+      return undefined;
+    }
+
+    const code = readProperty(record, "code");
+
+    if (typeof code === "string") {
+      const normalizedCode = code.toUpperCase();
+      const allowedCode = githubCredentialProbeNetworkCauseCodes.find(
+        (candidate) => candidate === normalizedCode
+      );
+
+      if (allowedCode) {
+        return allowedCode;
+      }
+    }
+
+    current = readProperty(record, "cause");
+  }
+
+  return undefined;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function readProperty(
+  record: Record<string, unknown>,
+  property: string
+): unknown {
+  try {
+    return Reflect.get(record, property);
+  } catch {
+    return undefined;
   }
 }

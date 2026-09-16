@@ -329,6 +329,17 @@ environment nunca são lidos. O BFF devolve esse objeto apenas no POST de
 revalidação autenticado do proprietário. Não entra nas RPCs/BD, na listagem de
 contas ou na renderização normal da UI.
 
+Um `unavailable` só pode incluir diagnóstico quando foi produzido por esse
+probe exato. O contrato aceita exclusivamente as categorias fixas
+`GITHUB_CREDENTIAL_PROBE_NETWORK_ERROR`,
+`GITHUB_CREDENTIAL_PROBE_RATE_LIMITED` e
+`GITHUB_CREDENTIAL_PROBE_GITHUB_UNAVAILABLE`, com mensagens literais. A
+categoria de rede pode ainda incluir apenas um cause code da allowlist
+`ENOTFOUND`, `EAI_AGAIN`, `ECONNRESET`, `ETIMEDOUT`, `CERT_HAS_EXPIRED`,
+`SELF_SIGNED_CERT_IN_CHAIN` ou `UNABLE_TO_VERIFY_LEAF_SIGNATURE`. Status,
+headers, body e texto remoto não atravessam o contrato. Um `unavailable`
+genérico continua sem diagnóstico.
+
 O worker expõe apenas `GET /health` e `POST /v1/copilot/validate`, rejeita
 `Origin` e não envia headers CORS. `/health` é readiness: faz `PING` e um
 `SET NX PX` efémero e bounded, devolvendo `503` sem detalhes quando Redis não

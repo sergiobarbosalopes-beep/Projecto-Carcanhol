@@ -149,3 +149,73 @@ test("transports only a redacted diagnostic for unknown validation", async () =>
     await once(server, "close");
   }
 });
+
+test("transports only allowlisted probe diagnostics for unavailable", async () => {
+  const diagnostic = {
+    event: "copilot_validation_probe_unavailable",
+    requestId,
+    code: "GITHUB_CREDENTIAL_PROBE_NETWORK_ERROR",
+    message: "github credential probe could not reach GitHub",
+    causeCode: "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  };
+  const server = createCopilotWorkerServer({
+    hmacSecret: secret,
+    validate: async ({ requestId: receivedRequestId }) => ({
+      ok: false,
+      requestId: receivedRequestId,
+      code: "unavailable",
+      diagnostic: { ...diagnostic, requestId: receivedRequestId },
+    }),
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+
+  try {
+    const address = server.address();
+    assert.equal(typeof address, "object");
+    const validate = createCopilotWorkerHttpClient({
+      baseUrl: `http://127.0.0.1:${address.port}`,
+      hmacSecret: secret,
+      timeoutMs: 1_000,
+    });
+
+    assert.deepEqual(await validate(token, requestId), {
+      ok: false,
+      requestId,
+      code: "unavailable",
+      diagnostic,
+    });
+  } finally {
+    server.close();
+    await once(server, "close");
+  }
+
+  const malformedClient = createCopilotWorkerHttpClient({
+    baseUrl: "https://worker.example",
+    hmacSecret: secret,
+    timeoutMs: 1_000,
+    fetchImpl: async () =>
+      new Response(
+        JSON.stringify({
+          ok: false,
+          requestId,
+          code: "unavailable",
+          diagnostic: {
+            ...diagnostic,
+            code: "GITHUB_CREDENTIAL_PROBE_NETWORK_ERROR",
+            message: `network failed for ${token}`,
+          },
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }
+      ),
+  });
+
+  assert.deepEqual(await malformedClient(token, requestId), {
+    ok: false,
+    requestId,
+    code: "unknown",
+  });
+});
