@@ -1091,6 +1091,9 @@ function ModelCatalogSection({
         : 0),
     0
   );
+  const globalDefault = catalogAccounts
+    .flatMap((account) => account.models.map((model) => ({ account, model })))
+    .find(({ model }) => model.is_default);
 
   return (
     <section
@@ -1107,7 +1110,8 @@ function ModelCatalogSection({
           </h3>
           <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
             Cada opção identifica o fornecedor e a conta. Uma única combinação
-            ativa e atual pode ser a predefinição global.
+            ativa e atual pode ser a predefinição global. Os limites Prompt e
+            Contexto são capacidade por pedido, não saldo da conta.
           </p>
         </div>
         <span
@@ -1117,6 +1121,21 @@ function ModelCatalogSection({
         >
           {availableCount.toLocaleString("pt-PT")} disponíveis
         </span>
+      </div>
+
+      <div
+        role="status"
+        aria-live="polite"
+        className="mt-4 rounded-lg border border-teal-200 bg-teal-50 p-3"
+      >
+        <p className="text-xs font-bold uppercase tracking-wide text-teal-800">
+          Predefinição global
+        </p>
+        <p className="mt-1 break-all text-sm font-semibold text-slate-900">
+          {globalDefault
+            ? `${PROVIDER_DETAILS[globalDefault.account.provider].label} · ${globalDefault.account.display_name} · ${globalDefault.model.display_name}`
+            : "Ainda não definida"}
+        </p>
       </div>
 
       {catalogAccounts.length === 0 ? (
@@ -1133,12 +1152,12 @@ function ModelCatalogSection({
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <h4
                   id={`llm-model-account-${account.id}`}
-                  className="text-sm font-bold text-slate-900"
+                  className="min-w-0 flex-1 break-all text-sm font-bold text-slate-900"
                 >
                   {PROVIDER_DETAILS[account.provider].label} ·{" "}
                   {account.display_name}
                 </h4>
-                <span className="text-xs font-semibold text-slate-500">
+                <span className="flex-none text-xs font-semibold text-slate-500">
                   {account.models.length.toLocaleString("pt-PT")} no catálogo
                 </span>
               </div>
@@ -1164,7 +1183,7 @@ function ModelCatalogSection({
                       <p className="mt-1 break-all font-mono text-xs text-slate-500">
                         {model.provider_model_id}
                       </p>
-                      <p className="mt-2 text-xs font-semibold text-slate-700">
+                      <p className="mt-2 break-all text-xs font-semibold text-slate-700">
                         Fornecedor: {PROVIDER_DETAILS[account.provider].label}
                         {" · "}Conta: {account.display_name}
                       </p>
@@ -1246,11 +1265,11 @@ function UsageAvailabilitySection({
           {accounts.map((account) => (
             <li
               key={account.id}
-              className="rounded-lg border border-slate-200 bg-slate-50 p-4"
+              className="min-w-0 rounded-lg border border-slate-200 bg-slate-50 p-4"
             >
               <div className="flex flex-wrap items-start justify-between gap-2">
-                <div>
-                  <p className="text-sm font-bold text-slate-950">
+                <div className="min-w-0 flex-1">
+                  <p className="break-all text-sm font-bold text-slate-950">
                     {account.display_name}
                   </p>
                   <p className="mt-1 text-xs text-slate-600">
@@ -1354,7 +1373,7 @@ function QuotaDetails({ account }: { account: LlmAccountPublic }) {
         <Metadata label="Utilização adicional">
           {formatOptionalCount(quota.overage_units)}
         </Metadata>
-        {quota.reset_at !== null && (
+        {isFutureQuotaReset(quota.reset_at) && (
           <Metadata label="Próxima reposição">
             {formatOptionalDate(quota.reset_at)}
           </Metadata>
@@ -1371,6 +1390,15 @@ function formatOptionalCount(value: number | null) {
   return value === null
     ? "Não disponível"
     : value.toLocaleString("pt-PT", { maximumFractionDigits: 6 });
+}
+
+function isFutureQuotaReset(value: string | null) {
+  if (!value) {
+    return false;
+  }
+
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && timestamp > Date.now();
 }
 
 function modelCapabilityNumber(

@@ -199,6 +199,20 @@ test("migration atomically enforces owned eligible global defaults and quota lif
   );
   assert.match(migration, /where scope = 'global'/);
   assert.match(migration, /pg_advisory_xact_lock/);
+  assert.match(migration, /create trigger llm_models_mirror_enabled/);
+  assert.match(migration, /new\.enabled := not new\.is_stale/);
+  const catalogSyncStart = migration.indexOf(
+    "create or replace function carcanhol.sync_llm_model_catalog"
+  );
+  const catalogSyncEnd = migration.indexOf(
+    "create or replace function carcanhol.create_validated_llm_account",
+    catalogSyncStart
+  );
+  assert.ok(catalogSyncStart >= 0 && catalogSyncEnd > catalogSyncStart);
+  assert.doesNotMatch(
+    migration.slice(catalogSyncStart, catalogSyncEnd),
+    /\benabled\b/
+  );
   assert.match(
     migration,
     /set_global_llm_default[\s\S]+security definer[\s\S]+set search_path = ''/
@@ -242,6 +256,16 @@ test("migration atomically enforces owned eligible global defaults and quota lif
   assert.match(migration, /provider_validation_failed/);
   assert.match(migration, /credential_changed/);
   assert.doesNotMatch(migration, /\braw_(?:error|body|headers|token)\b/i);
+
+  const repository = readFileSync(
+    new URL("../src/admin/llm-accounts.ts", import.meta.url),
+    "utf8"
+  );
+  const publicModelColumns = repository.match(
+    /const PUBLIC_MODEL_COLUMNS =\s*\n?\s*"([^"]+)"/
+  )?.[1];
+  assert.ok(publicModelColumns);
+  assert.doesNotMatch(publicModelColumns, /\benabled\b/);
 
   const route = readFileSync(
     new URL("../app/api/admin/llm-default/route.ts", import.meta.url),
@@ -287,8 +311,20 @@ test("LLM cards expose accessible manual and automatic validation states", () =>
   assert.match(panel, /maxContextWindowTokens/);
   assert.match(panel, /Fornecedor:/);
   assert.match(panel, /Conta:/);
+  assert.match(panel, /Predefinição global/);
+  assert.match(panel, /globalDefault\.model\.display_name/);
   assert.match(panel, /★ Predefinido/);
   assert.match(panel, /Definir como predefinido/);
+  assert.match(panel, /Prompt e\s+Contexto são capacidade por pedido/);
+  assert.match(panel, /min-w-0 flex-1 break-all/);
+  assert.match(panel, /min-w-0 rounded-lg border/);
+  const defaultButtonGuard = panel.match(
+    /disabled=\{([\s\S]*?)\}\s*onClick=\{\(\) => onSelectDefault/
+  )?.[1];
+  assert.ok(defaultButtonGuard);
+  assert.match(defaultButtonGuard, /account\.status !== "active"/);
+  assert.match(defaultButtonGuard, /model\.is_stale/);
+  assert.doesNotMatch(defaultButtonGuard, /\benabled\b/);
   assert.match(panel, /Utilização do GitHub Copilot/);
   assert.match(panel, /premium_interactions/);
   assert.match(panel, /créditos de IA ou\s+pedidos/);
@@ -296,7 +332,8 @@ test("LLM cards expose accessible manual and automatic validation states", () =>
   assert.match(panel, /% disponível/);
   assert.match(panel, /restantes/);
   assert.match(panel, /Próxima reposição/);
-  assert.match(panel, /quota\.reset_at !== null/);
+  assert.match(panel, /isFutureQuotaReset\(quota\.reset_at\)/);
+  assert.match(panel, /timestamp > Date\.now\(\)/);
   assert.match(panel, /account-wide/);
   assert.match(panel, /Quota ilimitada/);
   assert.match(panel, /Desatualizado/);

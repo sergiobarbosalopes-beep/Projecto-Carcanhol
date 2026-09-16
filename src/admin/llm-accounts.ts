@@ -37,9 +37,11 @@ import type {
 const PUBLIC_ACCOUNT_COLUMNS =
   "id, user_id, provider, display_name, credential_type, status, custom_endpoint, credential_suffix, credential_updated_at, last_validation_status, last_validation_at, last_validation_error_code, validation_generation, last_validation_request_id, created_at, updated_at";
 const PUBLIC_MODEL_COLUMNS =
-  "id, user_id, account_id, provider_model_id, display_name, enabled, discovery_metadata, is_stale, discovered_at, last_seen_at, created_at, updated_at";
+  "id, user_id, account_id, provider_model_id, display_name, discovery_metadata, is_stale, discovered_at, last_seen_at, created_at, updated_at";
 const PUBLIC_QUOTA_COLUMNS =
   "account_id, user_id, provider, metric, status, is_unlimited, included_units, used_units, remaining_units, remaining_percentage, overage_units, usage_allowed_after_limit, overage_allowed, reset_at, observed_at, attempted_at, error_code, created_at, updated_at";
+
+type CurrentLlmAccountModel = Omit<LlmAccountModel, "enabled">;
 
 export type RevalidateLlmAccountResult = {
   account: LlmAccountPublic;
@@ -568,7 +570,7 @@ async function listModelsForAccounts(
   userId: string,
   accountIds: string[]
 ) {
-  const byAccount = new Map<string, LlmAccountModel[]>();
+  const byAccount = new Map<string, CurrentLlmAccountModel[]>();
 
   if (accountIds.length === 0) {
     return byAccount;
@@ -602,7 +604,7 @@ function credentialSuffix(credential: string) {
 
 function toPublicAccount(
   account: LlmAccount,
-  models: LlmAccountModel[],
+  models: CurrentLlmAccountModel[],
   defaultModelId: string | null,
   quota: LlmAccountQuota | null
 ): LlmAccountPublic {
@@ -626,7 +628,7 @@ function toPublicAccount(
 }
 
 function toPublicModel(
-  model: LlmAccountModel,
+  model: CurrentLlmAccountModel,
   defaultModelId: string | null
 ): LlmAccountModelPublic {
   const metadata =

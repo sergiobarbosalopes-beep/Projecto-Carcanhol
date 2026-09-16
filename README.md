@@ -159,10 +159,11 @@ docs/architecture.md
    atómicas para conta+segredo+modelos e para revalidação. A sexta preserva o
    último catálogo e escolhas manuais em falhas transitórias de infraestrutura,
    mantendo a conta bloqueada em `error`. A sétima redefine o antigo
-   `enabled` como espelho de atualidade para compatibilidade, cria a preferência
-   global transacional preparada para futuros scopes por funcionalidade e
-   persiste snapshots account-wide de quota por provider, sem prompts,
-   respostas ou eventos de sessão.
+   `enabled` como espelho deprecated, derivado por trigger exclusivamente de
+   `is_stale` para compatibilidade, cria a preferência global transacional
+   preparada para futuros scopes por funcionalidade e persiste snapshots
+   account-wide de quota por provider, sem prompts, respostas ou eventos de
+   sessão.
 
 4. Em **Project Settings → API → Exposed schemas**, adicionar `carcanhol`.
 
@@ -349,9 +350,11 @@ Fontes oficiais do contrato pinned:
 - Falhas definitivas de credencial/entitlement/política/modelos mudam a conta
   para `invalid` e marcam o catálogo anterior stale/desativado. Falhas
   transitórias de worker/Redis mudam a conta para `error`, bloqueiam execução,
-  mas preservam explicitamente o último catálogo e escolhas `enabled` para
-  recuperação. Uma resposta antiga não vence uma mais recente porque a RPC
-  compara request-id + generation.
+  mas preservam explicitamente o último catálogo para recuperação. A
+  elegibilidade de um modelo depende apenas de conta `active` e
+  `is_stale = false`; `enabled` é um espelho deprecated mantido por trigger e
+  não é consultado pelo domínio/API/UI. Uma resposta antiga não vence uma mais
+  recente porque a RPC compara request-id + generation.
 
 ### Rotação da chave mestra LLM
 

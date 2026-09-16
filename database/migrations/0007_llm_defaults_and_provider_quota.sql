@@ -7,9 +7,29 @@
 begin;
 
 -- `enabled` used to mean a future manual authorization. Keep the column for
--- rolling compatibility, but redefine it as a mirror of catalog currency.
+-- rolling compatibility, but make `is_stale` the only source of truth.
 update carcanhol.llm_account_models
 set enabled = not is_stale;
+
+create or replace function carcanhol.mirror_llm_model_enabled()
+returns trigger
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+begin
+  new.enabled := not new.is_stale;
+  return new;
+end;
+$$;
+
+drop trigger if exists llm_models_mirror_enabled
+  on carcanhol.llm_account_models;
+create trigger llm_models_mirror_enabled
+before insert or update of enabled, is_stale
+on carcanhol.llm_account_models
+for each row
+execute function carcanhol.mirror_llm_model_enabled();
 
 alter table carcanhol.llm_account_models
   drop constraint if exists llm_account_models_stale_disabled;
@@ -18,7 +38,7 @@ alter table carcanhol.llm_account_models
   check (enabled = not is_stale);
 
 comment on column carcanhol.llm_account_models.enabled is
-  'Compatibility mirror of NOT is_stale. It is not an authorization or user choice and may be removed after all older application versions are retired.';
+  'Deprecated compatibility mirror generated from NOT is_stale by trigger. It is not an authorization, user choice or source of truth and may be removed after older application versions are retired.';
 
 create table if not exists carcanhol.llm_model_preferences (
   id uuid primary key default gen_random_uuid(),
@@ -502,7 +522,6 @@ begin
 
   update carcanhol.llm_account_models as stored
   set
-    enabled = false,
     is_stale = true,
     updated_at = now()
   where stored.account_id = p_account_id
@@ -518,7 +537,6 @@ begin
     account_id,
     provider_model_id,
     display_name,
-    enabled,
     discovery_metadata,
     is_stale,
     discovered_at,
@@ -529,7 +547,6 @@ begin
     p_account_id,
     model ->> 'id',
     model ->> 'displayName',
-    true,
     jsonb_build_object(
       'capabilities', model -> 'capabilities',
       'policy', model -> 'policy',
@@ -542,7 +559,6 @@ begin
   on conflict (account_id, provider_model_id)
   do update set
     display_name = excluded.display_name,
-    enabled = true,
     discovery_metadata = excluded.discovery_metadata,
     is_stale = false,
     last_seen_at = now(),
@@ -808,7 +824,6 @@ begin
     then
       update carcanhol.llm_account_models
       set
-        enabled = false,
         is_stale = true,
         updated_at = now()
       where account_id = p_account_id

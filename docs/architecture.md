@@ -217,8 +217,8 @@ compatível com GitHub Copilot.
 
 - `llm_account_models`: catálogo sincronizado por `provider_model_id`.
   `is_stale = false` significa disponível; a coluna histórica `enabled` fica
-  temporariamente como espelho de `not is_stale` para rolling compatibility e
-  deixa de representar autorização;
+  como espelho deprecated de `not is_stale`, mantido por trigger para rolling
+  compatibility e nunca consultado pelo domínio/API/UI;
 - `llm_model_preferences`: uma combinação conta+modelo por `scope`. Apenas
   `global` tem API/UI; `feature` reserva overrides futuros. Um advisory lock por
   utilizador serializa trocas concorrentes. A RPC exige ownership+membership,
