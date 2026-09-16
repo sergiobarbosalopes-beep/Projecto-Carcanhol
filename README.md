@@ -249,18 +249,18 @@ Após descobrir os modelos, o worker chama também a operação oficial
 experimental `client.rpc.account.getQuota({ gitHubToken })` do
 `@github/copilot-sdk@1.0.14`/CLI 1.0.85 e usa apenas
 `quotaSnapshots.premium_interactions`. A UI chama corretamente à métrica
-**Utilização do GitHub Copilot**, nunca tokens. Como a operação tipada não
-expõe se `premium_interactions` representa créditos de IA ou pedidos premium
-para aquele plano, a UI identifica a chave oficial e mostra as unidades sem
-conversão inventada. Para quotas finitas apresenta o rácio
-`utilizadas / incluídas`, a legenda “Créditos de IA ou pedidos premium,
-conforme o plano”, a percentagem **disponível** e as unidades restantes.
-Overage e apenas uma reposição futura inequívoca aparecem nos detalhes;
-entitlement ilimitado e valores ausentes são representados sem inventar
-totais. O restante é derivado apenas para entitlement finito como
-`max(0, incluídos - utilizados)`. Uma falha de quota não invalida credencial
-nem catálogo: conserva o último snapshot como stale, ou mostra “Não
-disponível” quando nunca existiu um valor.
+**Utilização do GitHub Copilot**, nunca tokens. Como a operação tipada não expõe
+a designação específica do plano, a UI apresenta exclusivamente **Unidades de
+utilização**, sem conversão ou seleção manual. Para quotas finitas mostra o
+rácio `utilizadas / incluídas`, a percentagem **disponível** e as unidades
+restantes. A nota associada esclarece que esta é a unidade account-wide
+reportada pelo provider e que Prompt/Contexto são capacidades técnicas por
+pedido, não este saldo. Overage e apenas uma reposição futura inequívoca
+aparecem nos detalhes; entitlement ilimitado e valores ausentes são
+representados sem inventar totais. O restante é derivado apenas para
+entitlement finito como `max(0, incluídos - utilizados)`. Uma falha de quota não
+invalida credencial nem catálogo: conserva o último snapshot como stale, ou
+mostra “Não disponível” quando nunca existiu um valor.
 Não são pedidas permissões adicionais: a operação usa a mesma credencial já
 validada para a conta.
 
@@ -273,8 +273,7 @@ ou utilização de sessões.
 
 Os valores são preservados como unidades decimais devolvidas pelo provider,
 sem divisão por 1 000. O tipo público pinned chama “requests” aos campos, mas
-não inclui o sinal `tokenBasedBilling` que o GitHub usa para apresentar
-`premium_interactions` como **AI credits** ou **Premium requests** conforme o
+não inclui o sinal `tokenBasedBilling` que determina a designação específica do
 plano. A aplicação não usa casts para aceder a esse campo não tipado. Além
 disso, `resetDate` só é propagado como próxima reposição quando é futuro, porque
 o teste E2E pinned demonstra que o runtime o preenche a partir do
@@ -293,7 +292,7 @@ Fontes oficiais do contrato pinned:
 - [`account.getQuota` e tipos gerados](https://github.com/github/copilot-sdk/blob/v1.0.14/nodejs/src/generated/rpc.ts#L4975-L5040);
 - [guia Usage and billing](https://github.com/github/copilot-sdk/blob/v1.0.14/docs/features/usage-and-billing.md#L1139-L1173);
 - [teste E2E pinned: valores sem escala e `resetDate` vindo do timestamp do snapshot](https://github.com/github/copilot-sdk/blob/v1.0.14/nodejs/test/e2e/rpc_server.e2e.test.ts#L158-L182);
-- [GitHub Desktop: distinção entre AI credits e Premium requests](https://github.com/desktop/desktop/blob/e25aac9bbce8e4431d81e79c81cc61d5b83d7cf0/app/src/ui/preferences/snapshot-card.tsx);
+- [GitHub Desktop: representação do bucket de utilização](https://github.com/desktop/desktop/blob/e25aac9bbce8e4431d81e79c81cc61d5b83d7cf0/app/src/ui/preferences/snapshot-card.tsx);
 - [GitHub Desktop: `tokenBasedBilling` ainda ausente do tipo público do SDK](https://github.com/desktop/desktop/blob/e25aac9bbce8e4431d81e79c81cc61d5b83d7cf0/app/src/lib/stores/copilot-store.ts).
 
 ## Scripts

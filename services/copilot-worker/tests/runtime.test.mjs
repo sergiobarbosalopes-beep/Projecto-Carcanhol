@@ -49,7 +49,7 @@ test("preserves provider units without inventing a milli-request scale", () => {
   );
 });
 
-test("preserves screenshot and later live AI-credit values as direct units", () => {
+test("preserves screenshot and later live provider-unit values directly", () => {
   const snapshots = [
     {
       usedRequests: 61_726,

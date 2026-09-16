@@ -1247,12 +1247,9 @@ function UsageAvailabilitySection({
         Utilização do GitHub Copilot
       </h3>
       <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
-        Métrica experimental account-wide{" "}
-        <code className="font-mono text-xs">premium_interactions</code>.
-        Conforme o plano, o GitHub pode apresentá-la como créditos de IA ou
-        pedidos premium; a API tipada atual não identifica a unidade. Os valores
-        são unidades do fornecedor, não tokens de prompt/contexto nem utilização
-        de sessões desta aplicação.
+        Unidades de utilização são a métrica account-wide reportada pelo
+        fornecedor. Prompt e Contexto são capacidades técnicas por pedido, não
+        este saldo nem a utilização de sessões desta aplicação.
       </p>
 
       {accounts.length === 0 ? (
@@ -1309,9 +1306,8 @@ function QuotaDetails({ account }: { account: LlmAccountPublic }) {
   if (account.provider !== "github_copilot") {
     return (
       <p className="mt-4 text-sm leading-6 text-slate-600">
-        Este fornecedor não declara a capacidade{" "}
-        <code className="font-mono text-xs">premium_interactions</code>; não é
-        feita qualquer equivalência artificial.
+        Este fornecedor não disponibiliza esta métrica account-wide; não é feita
+        qualquer equivalência artificial.
       </p>
     );
   }
@@ -1334,7 +1330,11 @@ function QuotaDetails({ account }: { account: LlmAccountPublic }) {
           Último valor conhecido; a atualização mais recente da quota falhou.
         </p>
       )}
-      <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
+      <div
+        role="group"
+        aria-labelledby={`llm-usage-units-${account.id}`}
+        className="mt-4 rounded-lg border border-slate-200 bg-white p-4"
+      >
         <p className="text-xl font-bold tabular-nums text-slate-950">
           {quota.is_unlimited || quota.included_units === null
             ? formatOptionalCount(quota.used_units)
@@ -1342,8 +1342,11 @@ function QuotaDetails({ account }: { account: LlmAccountPublic }) {
                 quota.included_units
               )}`}
         </p>
-        <p className="mt-1 text-xs leading-5 text-slate-600">
-          Créditos de IA ou pedidos premium, conforme o plano
+        <p
+          id={`llm-usage-units-${account.id}`}
+          className="mt-1 text-xs font-semibold leading-5 text-slate-600"
+        >
+          Unidades de utilização
         </p>
         <div className="mt-3 flex flex-wrap gap-2 text-xs font-bold text-slate-700">
           {quota.is_unlimited ? (

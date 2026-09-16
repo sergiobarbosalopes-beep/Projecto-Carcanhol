@@ -326,9 +326,14 @@ test("LLM cards expose accessible manual and automatic validation states", () =>
   assert.match(defaultButtonGuard, /model\.is_stale/);
   assert.doesNotMatch(defaultButtonGuard, /\benabled\b/);
   assert.match(panel, /Utilização do GitHub Copilot/);
-  assert.match(panel, /premium_interactions/);
-  assert.match(panel, /créditos de IA ou\s+pedidos/);
-  assert.match(panel, /Créditos de IA ou pedidos premium, conforme o plano/);
+  assert.match(panel, /Unidades de utilização/);
+  assert.match(panel, /métrica account-wide reportada pelo\s+fornecedor/);
+  assert.match(panel, /capacidades técnicas por pedido, não\s+este saldo/);
+  assert.match(
+    panel,
+    /aria-labelledby=\{`llm-usage-units-\$\{account\.id\}`\}/
+  );
+  assert.doesNotMatch(panel, /créditos de IA|pedidos premium/i);
   assert.match(panel, /% disponível/);
   assert.match(panel, /restantes/);
   assert.match(panel, /Próxima reposição/);

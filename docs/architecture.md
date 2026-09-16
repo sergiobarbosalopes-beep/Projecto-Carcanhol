@@ -228,7 +228,7 @@ compatível com GitHub Copilot.
   decimais sanitizadas e timestamps, nunca prompts, respostas, tokens de
   autenticação, bodies ou headers remotos. O schema usa nomes neutros
   `*_units`: o SDK público ainda não expõe `tokenBasedBilling`, portanto não
-  permite distinguir com segurança “AI credits” de “Premium requests”. Não há
+  permite obter com segurança a designação específica do plano. Não há
   conversão por uma escala inferida. `remaining_percentage` significa
   explicitamente percentagem restante; `reset_at` só é guardado quando o
   provider entrega uma data futura.
@@ -417,14 +417,13 @@ APIs REST de billing pessoal exigem a permissão adicional `Plan: read` e não
 cobrem planos pagos por organização, pelo que não são usadas.
 
 O worker consome apenas `quotaSnapshots.premium_interactions`. O SDK tipado não
-expõe `tokenBasedBilling`, o discriminador que o GitHub usa para apresentar o
-mesmo bucket como **AI credits** ou **Premium requests** conforme o plano.
-Respeitando a proibição de casts/hacks, o contrato interno usa unidades neutras
-e preserva os valores decimais sem divisão por 1 000. A percentagem é rotulada
-explicitamente como disponível/restante. A UI mostra o rácio
-`utilizadas / incluídas`, a legenda “Créditos de IA ou pedidos premium,
-conforme o plano” e as unidades restantes; nunca lhes chama tokens de
-prompt/contexto.
+expõe `tokenBasedBilling`, o discriminador que determina a designação específica
+do plano. Respeitando a proibição de casts/hacks, o contrato interno usa
+unidades neutras e preserva os valores decimais sem divisão por 1 000. A UI
+apresenta-as exclusivamente como **Unidades de utilização**, com o rácio
+`utilizadas / incluídas`, percentagem disponível e unidades restantes. A nota
+associada distingue esta unidade account-wide das capacidades técnicas
+Prompt/Contexto por pedido. Não existe seleção manual de unidade.
 
 Os generated typings também descrevem o payload raw
 `CopilotUserResponseQuotaSnapshotsPremiumInteractions`, mas não existe um RPC
