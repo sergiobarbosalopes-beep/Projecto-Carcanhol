@@ -250,14 +250,16 @@ experimental `client.rpc.account.getQuota({ gitHubToken })` do
 `quotaSnapshots.premium_interactions`. A UI chama corretamente à métrica
 **Utilização do GitHub Copilot**, nunca tokens. Como a operação tipada não
 expõe se `premium_interactions` representa créditos de IA ou pedidos premium
-para aquele plano, a UI identifica a chave oficial e mostra unidades do
-fornecedor sem conversão inventada. Mostra unidades utilizadas,
-incluídas/restantes quando a quota é finita, a **percentagem restante**,
-overage e apenas uma reposição futura inequívoca; entitlement ilimitado e
-valores ausentes são representados sem inventar totais. O restante é derivado
-apenas para entitlement finito como `max(0, incluídos - utilizados)`. Uma falha
-de quota não invalida credencial nem catálogo: conserva o último snapshot como
-stale, ou mostra “Não disponível” quando nunca existiu um valor.
+para aquele plano, a UI identifica a chave oficial e mostra as unidades sem
+conversão inventada. Para quotas finitas apresenta o rácio
+`utilizadas / incluídas`, a legenda “Créditos de IA ou pedidos premium,
+conforme o plano”, a percentagem **disponível** e as unidades restantes.
+Overage e apenas uma reposição futura inequívoca aparecem nos detalhes;
+entitlement ilimitado e valores ausentes são representados sem inventar
+totais. O restante é derivado apenas para entitlement finito como
+`max(0, incluídos - utilizados)`. Uma falha de quota não invalida credencial
+nem catálogo: conserva o último snapshot como stale, ou mostra “Não
+disponível” quando nunca existiu um valor.
 Não são pedidas permissões adicionais: a operação usa a mesma credencial já
 validada para a conta.
 
@@ -277,6 +279,12 @@ disso, `resetDate` só é propagado como próxima reposição quando é futuro, 
 o teste E2E pinned demonstra que o runtime o preenche a partir do
 `timestamp_utc` do próprio snapshot, apesar de o payload raw também ter o campo
 distinto `quota_reset_at`.
+
+Os generated typings incluem os tipos raw `CopilotUserResponse*`, mas nenhum
+RPC público, tipado e request-bound devolve esses campos para a credencial
+fornecida a `account.getQuota`. `session.gitHubAuth.getStatus` expõe apenas o
+estado e plano; os métodos internos que devolveriam auth info detalhada não
+fazem parte do contrato TypeScript público. Por isso não são usados.
 
 Fontes oficiais do contrato pinned:
 

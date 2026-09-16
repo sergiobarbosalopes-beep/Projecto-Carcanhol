@@ -47,6 +47,12 @@ indisponíveis devolvem apenas um código categórico fixo. Esta falha nunca
 transforma um catálogo válido numa falha de credencial. O BFF pode preservar o
 último snapshot como stale, sem persistir raw errors, bodies, headers ou token.
 
+Embora os generated typings descrevam `CopilotUserResponse` e os seus campos
+raw, o surface público request-bound só devolve `AccountQuotaSnapshot`, que não
+os contém. `session.gitHubAuth.getStatus` também não inclui unidade ou próximo
+reset. O worker não chama métodos internos sem typing, não lê respostas raw e
+não usa auth global que possa devolver credenciais.
+
 Existe um único probe de diagnóstico para a combinação exata
 `code=-32603` + `SDK session authentication failed: network fetch failed:
 request failed: builder error`. O worker faz `GET https://api.github.com/user`

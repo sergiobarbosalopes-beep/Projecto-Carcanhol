@@ -421,7 +421,17 @@ expõe `tokenBasedBilling`, o discriminador que o GitHub usa para apresentar o
 mesmo bucket como **AI credits** ou **Premium requests** conforme o plano.
 Respeitando a proibição de casts/hacks, o contrato interno usa unidades neutras
 e preserva os valores decimais sem divisão por 1 000. A percentagem é rotulada
-explicitamente como restante. A UI nunca lhes chama tokens de prompt/contexto.
+explicitamente como disponível/restante. A UI mostra o rácio
+`utilizadas / incluídas`, a legenda “Créditos de IA ou pedidos premium,
+conforme o plano” e as unidades restantes; nunca lhes chama tokens de
+prompt/contexto.
+
+Os generated typings também descrevem o payload raw
+`CopilotUserResponseQuotaSnapshotsPremiumInteractions`, mas não existe um RPC
+público, tipado e request-bound que o devolva para o token entregue a
+`account.getQuota`. `session.gitHubAuth.getStatus` expõe estado e plano, sem
+unidade ou próximo reset. Métodos internos sem declaração pública e auth global
+que possa devolver credenciais ficam deliberadamente fora do desenho.
 
 O payload raw distingue `timestamp_utc`, instante de captura, de
 `quota_reset_at`, próxima reposição. Porém, o teste E2E pinned mostra

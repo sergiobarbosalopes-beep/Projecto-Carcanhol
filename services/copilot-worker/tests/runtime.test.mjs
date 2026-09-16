@@ -49,6 +49,63 @@ test("preserves provider units without inventing a milli-request scale", () => {
   );
 });
 
+test("preserves screenshot and later live AI-credit values as direct units", () => {
+  const snapshots = [
+    {
+      usedRequests: 61_726,
+      remainingPercentage: 87.6548,
+    },
+    {
+      usedRequests: 66_000,
+      remainingPercentage: 86.8,
+    },
+  ];
+
+  assert.deepEqual(
+    snapshots.map(({ usedRequests, remainingPercentage }) =>
+      sanitizePremiumInteractionsQuota({
+        quotaSnapshots: {
+          premium_interactions: {
+            isUnlimitedEntitlement: false,
+            entitlementRequests: 500_000,
+            usedRequests,
+            usageAllowedWithExhaustedQuota: true,
+            remainingPercentage,
+            overage: 0,
+            overageAllowedWithExhaustedQuota: true,
+          },
+        },
+      })
+    ),
+    [
+      {
+        status: "available",
+        metric: "premium_interactions",
+        isUnlimited: false,
+        usedUnits: 61_726,
+        includedUnits: 500_000,
+        remainingUnits: 438_274,
+        remainingPercentage: 87.6548,
+        overageUnits: 0,
+        usageAllowedAfterLimit: true,
+        overageAllowed: true,
+      },
+      {
+        status: "available",
+        metric: "premium_interactions",
+        isUnlimited: false,
+        usedUnits: 66_000,
+        includedUnits: 500_000,
+        remainingUnits: 434_000,
+        remainingPercentage: 86.8,
+        overageUnits: 0,
+        usageAllowedAfterLimit: true,
+        overageAllowed: true,
+      },
+    ]
+  );
+});
+
 test("preserves fractional provider units and a future reset date", () => {
   assert.deepEqual(
     sanitizePremiumInteractionsQuota({

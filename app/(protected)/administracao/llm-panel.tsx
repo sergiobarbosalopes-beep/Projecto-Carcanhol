@@ -1315,28 +1315,43 @@ function QuotaDetails({ account }: { account: LlmAccountPublic }) {
           Último valor conhecido; a atualização mais recente da quota falhou.
         </p>
       )}
+      <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
+        <p className="text-xl font-bold tabular-nums text-slate-950">
+          {quota.is_unlimited || quota.included_units === null
+            ? formatOptionalCount(quota.used_units)
+            : `${formatOptionalCount(quota.used_units)} / ${formatOptionalCount(
+                quota.included_units
+              )}`}
+        </p>
+        <p className="mt-1 text-xs leading-5 text-slate-600">
+          Créditos de IA ou pedidos premium, conforme o plano
+        </p>
+        <div className="mt-3 flex flex-wrap gap-2 text-xs font-bold text-slate-700">
+          {quota.is_unlimited ? (
+            <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-emerald-800">
+              Quota ilimitada
+            </span>
+          ) : (
+            <>
+              {quota.remaining_percentage !== null && (
+                <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-emerald-800">
+                  {quota.remaining_percentage.toLocaleString("pt-PT", {
+                    maximumFractionDigits: 2,
+                  })}
+                  % disponível
+                </span>
+              )}
+              {quota.remaining_units !== null && (
+                <span className="rounded-full bg-slate-200 px-2.5 py-1">
+                  {formatOptionalCount(quota.remaining_units)} restantes
+                </span>
+              )}
+            </>
+          )}
+        </div>
+      </div>
       <dl className="mt-4 grid gap-3 text-xs sm:grid-cols-2">
-        <Metadata label="Unidades utilizadas">
-          {formatOptionalCount(quota.used_units)}
-        </Metadata>
-        <Metadata label="Unidades incluídas">
-          {quota.is_unlimited
-            ? "Ilimitados"
-            : formatOptionalCount(quota.included_units)}
-        </Metadata>
-        <Metadata label="Unidades restantes">
-          {quota.is_unlimited
-            ? "Ilimitados"
-            : formatOptionalCount(quota.remaining_units)}
-        </Metadata>
-        <Metadata label="Percentagem restante">
-          {quota.is_unlimited || quota.remaining_percentage === null
-            ? "Não aplicável"
-            : `${quota.remaining_percentage.toLocaleString("pt-PT", {
-                maximumFractionDigits: 2,
-              })}%`}
-        </Metadata>
-        <Metadata label="Unidades adicionais">
+        <Metadata label="Utilização adicional">
           {formatOptionalCount(quota.overage_units)}
         </Metadata>
         {quota.reset_at !== null && (
