@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   AUTO_VALIDATION_MAX_ACCOUNTS,
   createRequestCoalescer,
+  isAutomaticLlmRefreshDue,
   runBoundedAccountValidation,
 } from "../src/admin/llm-auto-validation.ts";
 import { persistOnlyAfterValidation } from "../src/admin/validated-account-creation.ts";
@@ -25,15 +26,26 @@ test("does not persist an account when real validation fails", async () => {
 
 test("persists only the sanitized models returned by successful validation", async () => {
   const models = [{ id: "gpt-5" }];
+  const quota = { status: "unavailable" };
   const result = await persistOnlyAfterValidation({
-    validate: async () => ({ ok: true, models }),
-    persist: async (validatedModels) => {
+    validate: async () => ({ ok: true, models, quota }),
+    persist: async (validatedModels, validatedQuota) => {
       assert.equal(validatedModels, models);
+      assert.equal(validatedQuota, quota);
       return "created";
     },
   });
 
   assert.deepEqual(result, { ok: true, value: "created" });
+});
+
+test("refresh TTL avoids repeated automatic provider calls", () => {
+  const now = Date.parse("2026-09-16T09:00:00Z");
+
+  assert.equal(isAutomaticLlmRefreshDue(null, now), true);
+  assert.equal(isAutomaticLlmRefreshDue("2026-09-16T08:44:59Z", now), true);
+  assert.equal(isAutomaticLlmRefreshDue("2026-09-16T08:50:00Z", now), false);
+  assert.equal(isAutomaticLlmRefreshDue("invalid", now), true);
 });
 
 test("distinguishes transient infrastructure failures from credential failures", () => {
@@ -171,6 +183,71 @@ test("migrations atomically sync models and preserve transient catalogs", () => 
   assert.match(repository, /LlmValidationSupersededError/);
 });
 
+test("migration atomically enforces owned eligible global defaults and quota lifecycle", () => {
+  const migration = readFileSync(
+    new URL(
+      "../database/migrations/0007_llm_defaults_and_provider_quota.sql",
+      import.meta.url
+    ),
+    "utf8"
+  );
+
+  assert.match(migration, /\bbegin;[\s\S]+commit;\s*$/);
+  assert.match(
+    migration,
+    /create table if not exists carcanhol\.llm_model_preferences/
+  );
+  assert.match(migration, /where scope = 'global'/);
+  assert.match(migration, /pg_advisory_xact_lock/);
+  assert.match(
+    migration,
+    /set_global_llm_default[\s\S]+security definer[\s\S]+set search_path = ''/
+  );
+  assert.match(
+    migration,
+    /model\.user_id = p_user_id[\s\S]+not model\.is_stale[\s\S]+account\.status = 'active'/
+  );
+  assert.match(migration, /\(select auth\.uid\(\)\) is null/);
+  assert.match(
+    migration,
+    /p_user_id is distinct from \(select auth\.uid\(\)\)/
+  );
+  assert.match(
+    migration,
+    /clear_ineligible_llm_preferences[\s\S]+security definer[\s\S]+pg_advisory_xact_lock/
+  );
+  assert.match(
+    migration,
+    /grant select on carcanhol\.llm_model_preferences to authenticated/
+  );
+  assert.doesNotMatch(
+    migration,
+    /grant select,\s*insert,\s*delete on carcanhol\.llm_model_preferences/
+  );
+  assert.match(migration, /delete from carcanhol\.llm_model_preferences/);
+  assert.match(migration, /on delete cascade/);
+  assert.match(migration, /llm_models_clear_ineligible_preferences/);
+  assert.match(migration, /llm_accounts_clear_ineligible_preferences/);
+  assert.match(
+    migration,
+    /create table if not exists carcanhol\.llm_account_quotas/
+  );
+  assert.match(migration, /metric = 'premium_requests'/);
+  assert.match(migration, /status in \('available', 'unavailable', 'stale'\)/);
+  assert.match(migration, /provider_validation_failed/);
+  assert.match(migration, /credential_changed/);
+  assert.doesNotMatch(migration, /\braw_(?:error|body|headers|token)\b/i);
+
+  const route = readFileSync(
+    new URL("../app/api/admin/llm-default/route.ts", import.meta.url),
+    "utf8"
+  );
+  assert.match(route, /rejectCrossOrigin\(request\)/);
+  assert.match(route, /requireAuthorizedUser/);
+  assert.match(route, /setGlobalLlmDefault\(\s*user\.id/);
+  assert.doesNotMatch(route, /body\.userId|input\.data\.userId/);
+});
+
 test("LLM cards expose accessible manual and automatic validation states", () => {
   const panel = readFileSync(
     new URL("../app/(protected)/administracao/llm-panel.tsx", import.meta.url),
@@ -188,12 +265,16 @@ test("LLM cards expose accessible manual and automatic validation states", () =>
   assert.match(panel, /account\.models\.map/);
   assert.match(panel, /model\.provider_model_id/);
   assert.match(panel, /maxContextWindowTokens/);
-  assert.match(panel, /Disponível · autorização pendente/);
-  assert.match(panel, /Utilização de tokens no ciclo/);
-  assert.match(panel, /Tokens consumidos/);
-  assert.match(panel, /Tokens restantes/);
-  assert.match(panel, /Métrica não disponibilizada/);
-  assert.match(panel, /quota experimental em pedidos premium/);
+  assert.match(panel, /Fornecedor:/);
+  assert.match(panel, /Conta:/);
+  assert.match(panel, /★ Predefinido/);
+  assert.match(panel, /Definir como predefinido/);
+  assert.match(panel, /Pedidos premium/);
+  assert.match(panel, /account-wide/);
+  assert.match(panel, /Ilimitados/);
+  assert.match(panel, /Desatualizado/);
+  assert.doesNotMatch(panel, /autorização pendente/);
+  assert.doesNotMatch(panel, /Utilização de tokens no ciclo/);
   assert.doesNotMatch(panel, /function FutureSection/);
 });
 

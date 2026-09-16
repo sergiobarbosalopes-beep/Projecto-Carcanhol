@@ -1,7 +1,7 @@
 # Arquitetura — Projecto Carcanhol
 
-Versão: 3.2
-Estado: Fase 3B implementada
+Versão: 3.3
+Estado: Fase 3C implementada
 
 ## 1. Objetivo e âmbito atual
 
@@ -20,11 +20,13 @@ A Fase 3B acrescenta validação real à fundação de produto e administração
 - gestão de várias contas de fornecedores LLM por utilizador;
 - GitHub Copilot como provider canónico, validado através do SDK num worker;
 - descoberta e sincronização do catálogo de modelos por conta;
+- predefinição global atómica de uma combinação conta+modelo por utilizador;
+- quota account-wide de pedidos premium, isolada da telemetria de sessões;
 - envelopes AES-256-GCM de credenciais numa tabela service-only;
 - contrato server-only para carregar futuramente Skills ativas.
 
 Pesquisa, Chat, Análises, geração LLM e dados financeiros não estão
-implementados. Os modelos descobertos não são autorizados automaticamente.
+implementados. Os modelos atuais descobertos ficam disponíveis para seleção.
 
 ## 2. Arquitetura de execução
 
@@ -42,9 +44,9 @@ Next.js 16 App Router / Vercel
          │ token plaintext apenas durante o pedido
          ▼
       Copilot validation worker / Node 24 container
-        ├─ endpoint estrito validate/listModels
+        ├─ endpoint estrito validate/listModels/getQuota
         ├─ @github/copilot-sdk 1.0.14 / CLI 1.0.85, mode: empty
-        ├─ sem prompts, sessões ou tools
+        ├─ sem prompts persistidos, geração ou tools
         └─ timeout, concorrência e replay bounded
   │
   ▼
@@ -93,6 +95,7 @@ cada handler de administração repete o guard junto do acesso aos dados.
 | `PATCH`  | `/api/admin/llm-accounts/:id`            | nome/endpoint            | Edita metadados próprios    |
 | `PUT`    | `/api/admin/llm-accounts/:id/credential` | nova credencial          | Substitui envelope          |
 | `DELETE` | `/api/admin/llm-accounts/:id`            | confirmationName         | Elimina conta + segredo     |
+| `PUT`    | `/api/admin/llm-default`                 | accountModelId           | Troca predefinição global   |
 
 Todos os inputs são validados com Zod. Handlers mutantes exigem um header
 `Origin` correspondente ao origin efetivo, considerando
@@ -116,6 +119,7 @@ As migrations são aplicadas por ordem e são reexecutáveis:
 4. `0004_github_copilot_provider.sql`;
 5. `0005_github_copilot_validation.sql`;
 6. `0006_preserve_transient_validation_catalog.sql`.
+7. `0007_llm_defaults_and_provider_quota.sql`.
 
 Nenhuma migration cria objetos de aplicação em `public`.
 
@@ -209,25 +213,26 @@ Os tipos genéricos `token` e `oauth` permanecem permitidos apenas para
 compatibilidade não destrutiva com outros providers; `api_key` não é
 compatível com GitHub Copilot.
 
-### Catálogo e estruturas futuras
+### Catálogo, predefinição e quota
 
-- `llm_account_models`: catálogo sincronizado por `provider_model_id`; cada
-  modelo novo começa `enabled = false`, metadata é allowlisted/bounded e
-  modelos ausentes ou invalidados por uma falha definitiva ficam
-  `is_stale = true` e desativados. Timeout/indisponibilidade/erro desconhecido
-  bloqueiam a conta com `status = error`, mas preservam catálogo e escolhas do
-  último sucesso;
-- `llm_routing_rules`: modelo geral ou por funcionalidade, onde ordem 0 é o
-  principal e as restantes rows são fallbacks ordenados;
-- `llm_usage_events`: tokens de entrada/saída, latência, estado e custo
-  estimado, sem colunas para prompts ou respostas.
+- `llm_account_models`: catálogo sincronizado por `provider_model_id`.
+  `is_stale = false` significa disponível; a coluna histórica `enabled` fica
+  temporariamente como espelho de `not is_stale` para rolling compatibility e
+  deixa de representar autorização;
+- `llm_model_preferences`: uma combinação conta+modelo por `scope`. Apenas
+  `global` tem API/UI; `feature` reserva overrides futuros. Um advisory lock por
+  utilizador serializa trocas concorrentes. A RPC exige ownership+membership,
+  conta `active` e modelo não stale;
+- `llm_account_quotas`: snapshot provider-reported por conta+capability. Nesta
+  entrega só `github_copilot/premium_requests` é permitido. Guarda valores
+  sanitizados e timestamps, nunca prompts, respostas, tokens de autenticação,
+  bodies ou headers remotos.
 
-As três tabelas são metadata user-owned com RLS ownership + membership.
-Authenticated tem apenas leitura. Descoberta é aplicada pelas RPCs
-service-only; autorização, routing e telemetria ainda não têm handlers.
-Qualquer runtime futuro terá de exigir simultaneamente conta `active`, modelo
-`enabled` e `is_stale = false`; uma conta `error` nunca é elegível mesmo quando
-o catálogo/seleção anterior foi preservado.
+Preferências têm RLS ownership+membership. FK cascade e triggers removem a
+predefinição se conta/modelo for eliminado, ficar inativo ou stale. Quota é
+read-only para authenticated e escrita apenas por RPC service-role após a
+validação ownership-safe. Uma falha de quota mantém a conta/modelos válidos e
+marca o último snapshot `stale` (ou `unavailable` sem histórico).
 
 ## 6. Lifecycle de Skills
 
@@ -260,7 +265,10 @@ O GitHub Models foi retirado em 30 de julho de 2026. A integração usa
 `@github/copilot-sdk@1.0.14` (Copilot CLI 1.0.85), cujo runtime requer Node
 `^20.19.0 || >=22.12.0`; o container fixa Node 24. A validação cria uma sessão
 efémera request-bound com `SessionConfig.gitHubToken`, omite o modelo e chama a
-RPC pública tipada `session.rpc.model.list({})`, sem enviar prompt.
+RPC pública tipada `session.rpc.model.list({})`, sem enviar prompt. Depois usa
+a operação experimental tipada
+`client.rpc.account.getQuota({ gitHubToken })`; ausência, erro ou shape inválido
+é reduzido a um código local e não altera o sucesso do catálogo.
 
 O onboarding manual aceita exclusivamente um fine-grained PAT `github_pat_`
 da conta pessoal, com a conta pessoal como Resource owner e a Account
@@ -305,6 +313,7 @@ Worker/container Copilot
   ├─ comparação HMAC constant-time + janela + replay store
   ├─ concorrência/fila/payload/timeout bounded
   ├─ start → createSession({ gitHubToken }) → session.model.list
+  ├─ account.getQuota({ gitHubToken }) → premium_interactions
   ├─ disconnect → deleteSession → stop
   └─ resposta allowlisted: model id/name/capabilities/policy/billing
 ```

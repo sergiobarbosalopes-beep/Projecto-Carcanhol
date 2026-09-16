@@ -4,6 +4,7 @@ import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import {
   AUTO_VALIDATION_MAX_ACCOUNTS,
   createRequestCoalescer,
+  isAutomaticLlmRefreshDue,
   runBoundedAccountValidation,
 } from "@/src/admin/llm-auto-validation";
 import {
@@ -99,6 +100,7 @@ export function LlmPanel({
   const [creating, setCreating] = useState(false);
   const [action, setAction] = useState<AccountAction>(null);
   const [loading, setLoading] = useState(false);
+  const [defaultPendingId, setDefaultPendingId] = useState<string | null>(null);
   const [validatingIds, setValidatingIds] = useState<Set<string>>(new Set());
   const [feedback, setFeedback] = useState<Feedback>(null);
   const mountedRef = useRef(false);
@@ -122,7 +124,13 @@ export function LlmPanel({
     if (!automaticValidationStartedRef.current) {
       automaticValidationStartedRef.current = true;
       const githubAccountIds = accountsRef.current
-        .filter((account) => account.provider === "github_copilot")
+        .filter(
+          (account) =>
+            account.provider === "github_copilot" &&
+            isAutomaticLlmRefreshDue(
+              account.quota?.attempted_at ?? account.last_validation_at
+            )
+        )
         .map((account) => account.id);
 
       void runBoundedAccountValidation({
@@ -237,6 +245,38 @@ export function LlmPanel({
     return true;
   }
 
+  async function selectDefault(accountModelId: string) {
+    setDefaultPendingId(accountModelId);
+    setFeedback(null);
+    const result = await requestJson<{ accountModelId: string }>(
+      "/api/admin/llm-default",
+      {
+        method: "PUT",
+        body: JSON.stringify({ accountModelId }),
+      }
+    );
+    setDefaultPendingId(null);
+
+    if (!result.ok) {
+      setFeedback({ kind: "error", message: result.error });
+      return;
+    }
+
+    setAccounts((current) =>
+      current.map((account) => ({
+        ...account,
+        models: account.models.map((model) => ({
+          ...model,
+          is_default: model.id === result.data.accountModelId,
+        })),
+      }))
+    );
+    setFeedback({
+      kind: "success",
+      message: "Predefinição global atualizada.",
+    });
+  }
+
   const pendingCount = accounts.filter(
     (account) => account.status !== "active"
   ).length;
@@ -257,7 +297,7 @@ export function LlmPanel({
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <SectionTitle
           title="Contas de fornecedores LLM"
-          description="Valide contas GitHub Copilot e sincronize os modelos acessíveis. A autorização manual dos modelos será o passo seguinte."
+          description="Valide contas, consulte modelos e pedidos premium e escolha a combinação conta+modelo usada por predefinição."
         />
         <button
           type="button"
@@ -295,8 +335,8 @@ export function LlmPanel({
       <div className="mt-4 rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm leading-6 text-blue-950">
         As contas GitHub Copilot são revalidadas ao entrar nesta área. Uma conta
         só fica ativa após autenticação real e descoberta de pelo menos um
-        modelo. Os modelos encontrados continuam desativados até existir
-        autorização manual numa entrega futura.
+        modelo. A atualização automática respeita um intervalo mínimo de 15
+        minutos; “Validar novamente” força uma atualização imediata.
       </div>
 
       <FeedbackMessage feedback={feedback} />
@@ -432,8 +472,12 @@ export function LlmPanel({
       </section>
 
       <div className="mt-8 grid gap-4">
-        <ModelCatalogSection accounts={accounts} />
-        <UsageAvailabilitySection />
+        <ModelCatalogSection
+          accounts={accounts}
+          defaultPendingId={defaultPendingId}
+          onSelectDefault={(modelId) => void selectDefault(modelId)}
+        />
+        <UsageAvailabilitySection accounts={accounts} />
       </div>
     </div>
   );
@@ -1027,7 +1071,15 @@ function SummaryCard({ label, value }: { label: string; value: string }) {
   );
 }
 
-function ModelCatalogSection({ accounts }: { accounts: LlmAccountPublic[] }) {
+function ModelCatalogSection({
+  accounts,
+  defaultPendingId,
+  onSelectDefault,
+}: {
+  accounts: LlmAccountPublic[];
+  defaultPendingId: string | null;
+  onSelectDefault: (modelId: string) => void;
+}) {
   const catalogAccounts = accounts.filter(
     (account) => account.models.length > 0
   );
@@ -1054,8 +1106,8 @@ function ModelCatalogSection({ accounts }: { accounts: LlmAccountPublic[] }) {
             Modelos disponíveis
           </h3>
           <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
-            Catálogo devolvido pelas contas validadas. Os modelos continuam
-            desativados até existir autorização manual.
+            Cada opção identifica o fornecedor e a conta. Uma única combinação
+            ativa e atual pode ser a predefinição global.
           </p>
         </div>
         <span
@@ -1083,6 +1135,7 @@ function ModelCatalogSection({ accounts }: { accounts: LlmAccountPublic[] }) {
                   id={`llm-model-account-${account.id}`}
                   className="text-sm font-bold text-slate-900"
                 >
+                  {PROVIDER_DETAILS[account.provider].label} ·{" "}
                   {account.display_name}
                 </h4>
                 <span className="text-xs font-semibold text-slate-500">
@@ -1111,6 +1164,10 @@ function ModelCatalogSection({ accounts }: { accounts: LlmAccountPublic[] }) {
                       <p className="mt-1 break-all font-mono text-xs text-slate-500">
                         {model.provider_model_id}
                       </p>
+                      <p className="mt-2 text-xs font-semibold text-slate-700">
+                        Fornecedor: {PROVIDER_DETAILS[account.provider].label}
+                        {" · "}Conta: {account.display_name}
+                      </p>
                       {(maxPromptTokens || maxContextTokens) && (
                         <p className="mt-2 text-xs leading-5 text-slate-600">
                           {maxPromptTokens &&
@@ -1123,6 +1180,28 @@ function ModelCatalogSection({ accounts }: { accounts: LlmAccountPublic[] }) {
                       <p className="mt-2 text-xs font-semibold text-slate-600">
                         {modelCatalogStatus(account, model)}
                       </p>
+                      <button
+                        type="button"
+                        aria-pressed={model.is_default}
+                        disabled={
+                          defaultPendingId !== null ||
+                          account.status !== "active" ||
+                          model.is_stale ||
+                          model.is_default
+                        }
+                        onClick={() => onSelectDefault(model.id)}
+                        className={`mt-3 min-h-10 w-full rounded-lg px-3 text-xs font-bold transition ${
+                          model.is_default
+                            ? "bg-teal-700 text-white"
+                            : "border border-slate-300 bg-white text-slate-800 hover:border-teal-500 disabled:cursor-not-allowed disabled:opacity-55"
+                        }`}
+                      >
+                        {model.is_default
+                          ? "★ Predefinido"
+                          : defaultPendingId === model.id
+                            ? "A guardar…"
+                            : "Definir como predefinido"}
+                      </button>
                     </li>
                   );
                 })}
@@ -1135,28 +1214,142 @@ function ModelCatalogSection({ accounts }: { accounts: LlmAccountPublic[] }) {
   );
 }
 
-function UsageAvailabilitySection() {
+function UsageAvailabilitySection({
+  accounts,
+}: {
+  accounts: LlmAccountPublic[];
+}) {
   return (
-    <section className="rounded-xl border border-slate-200 bg-slate-50 p-5">
-      <span className="inline-flex rounded-full bg-slate-200 px-2 py-1 text-xs font-bold text-slate-700">
-        Métrica não disponibilizada
-      </span>
-      <h3 className="mt-3 font-bold text-slate-950">
-        Utilização de tokens no ciclo
+    <section
+      className="rounded-xl border border-slate-200 bg-white p-4 sm:p-5"
+      aria-labelledby="llm-premium-requests-heading"
+    >
+      <h3
+        id="llm-premium-requests-heading"
+        className="font-bold text-slate-950"
+      >
+        Pedidos premium
       </h3>
-      <dl className="mt-4 grid gap-3 sm:grid-cols-2">
-        <Metadata label="Tokens consumidos">Não disponível</Metadata>
-        <Metadata label="Tokens restantes">Não disponível</Metadata>
-      </dl>
-      <p className="mt-4 text-sm leading-6 text-slate-600">
-        O GitHub Copilot não disponibiliza um total de tokens por utilizador
-        para o ciclo atual. O SDK expõe métricas apenas da sessão executada
-        nesta aplicação e uma quota experimental em pedidos premium, que não
-        equivale a tokens. Para evitar números enganadores, não apresentamos
-        estimativas.
+      <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
+        Métrica account-wide reportada pelo fornecedor. Não representa tokens de
+        prompt/contexto nem utilização de sessões desta aplicação.
       </p>
+
+      {accounts.length === 0 ? (
+        <p className="mt-4 rounded-lg bg-slate-50 p-4 text-sm text-slate-600">
+          Adicione uma conta para consultar a utilização disponibilizada pelo
+          fornecedor.
+        </p>
+      ) : (
+        <ul className="mt-5 grid gap-3 lg:grid-cols-2">
+          {accounts.map((account) => (
+            <li
+              key={account.id}
+              className="rounded-lg border border-slate-200 bg-slate-50 p-4"
+            >
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <p className="text-sm font-bold text-slate-950">
+                    {account.display_name}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-600">
+                    {PROVIDER_DETAILS[account.provider].label}
+                  </p>
+                </div>
+                <QuotaStatusBadge account={account} />
+              </div>
+              <QuotaDetails account={account} />
+            </li>
+          ))}
+        </ul>
+      )}
     </section>
   );
+}
+
+function QuotaStatusBadge({ account }: { account: LlmAccountPublic }) {
+  const quota = account.quota;
+  const label =
+    account.provider !== "github_copilot"
+      ? "Não suportado"
+      : quota?.status === "available"
+        ? "Atualizado"
+        : quota?.status === "stale"
+          ? "Desatualizado"
+          : "Não disponível";
+
+  return (
+    <span className="inline-flex rounded-full bg-slate-200 px-2 py-1 text-xs font-bold text-slate-700">
+      {label}
+    </span>
+  );
+}
+
+function QuotaDetails({ account }: { account: LlmAccountPublic }) {
+  if (account.provider !== "github_copilot") {
+    return (
+      <p className="mt-4 text-sm leading-6 text-slate-600">
+        Este fornecedor não declara a capacidade “pedidos premium”; não é feita
+        qualquer equivalência artificial.
+      </p>
+    );
+  }
+
+  const quota = account.quota;
+
+  if (!quota || quota.status === "unavailable") {
+    return (
+      <p className="mt-4 text-sm leading-6 text-slate-600">
+        Não disponível. A falha desta métrica não altera a validade da conta nem
+        o catálogo de modelos.
+      </p>
+    );
+  }
+
+  return (
+    <>
+      {quota.status === "stale" && (
+        <p className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
+          Último valor conhecido; a atualização mais recente da quota falhou.
+        </p>
+      )}
+      <dl className="mt-4 grid gap-3 text-xs sm:grid-cols-2">
+        <Metadata label="Usados">
+          {formatOptionalCount(quota.used_requests)}
+        </Metadata>
+        <Metadata label="Incluídos">
+          {quota.is_unlimited
+            ? "Ilimitados"
+            : formatOptionalCount(quota.included_requests)}
+        </Metadata>
+        <Metadata label="Restantes">
+          {quota.is_unlimited
+            ? "Ilimitados"
+            : formatOptionalCount(quota.remaining_requests)}
+        </Metadata>
+        <Metadata label="Percentagem restante">
+          {quota.is_unlimited || quota.remaining_percentage === null
+            ? "Não aplicável"
+            : `${quota.remaining_percentage.toLocaleString("pt-PT", {
+                maximumFractionDigits: 2,
+              })}%`}
+        </Metadata>
+        <Metadata label="Uso adicional">
+          {formatOptionalCount(quota.overage_requests)}
+        </Metadata>
+        <Metadata label="Renovação">
+          {formatOptionalDate(quota.reset_at)}
+        </Metadata>
+        <Metadata label="Última observação" wide>
+          {formatOptionalDate(quota.observed_at)}
+        </Metadata>
+      </dl>
+    </>
+  );
+}
+
+function formatOptionalCount(value: number | null) {
+  return value === null ? "Não disponível" : value.toLocaleString("pt-PT");
 }
 
 function modelCapabilityNumber(
@@ -1193,7 +1386,7 @@ function modelCatalogStatus(
     return "Preservado · conta indisponível";
   }
 
-  return model.enabled ? "Autorizado" : "Disponível · autorização pendente";
+  return model.is_default ? "Disponível · Predefinido" : "Disponível";
 }
 
 function Metadata({

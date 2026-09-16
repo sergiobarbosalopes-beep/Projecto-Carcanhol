@@ -210,3 +210,9 @@ export const deleteLlmAccountSchema = z
   .strict();
 
 export const llmAccountIdSchema = z.string().uuid();
+
+export const setGlobalLlmDefaultSchema = z
+  .object({
+    accountModelId: z.string().uuid(),
+  })
+  .strict();

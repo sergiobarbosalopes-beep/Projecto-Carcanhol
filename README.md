@@ -4,12 +4,14 @@ Aplicação Next.js de apoio à decisão de investimento, preparada para combina
 dados financeiros reais com análise assistida por IA. A arquitetura completa
 está em [`docs/architecture.md`](docs/architecture.md).
 
-**Estado atual: Fase 3B — validação real do GitHub Copilot.** A aplicação inclui
+**Estado atual: Fase 3C — predefinição e quota LLM.** A aplicação inclui
 autenticação server-side, navegação protegida, gestão de conta, premissas
 globais, Skills manuais e configuração segura de várias contas LLM por
 utilizador. Contas GitHub Copilot são autenticadas num worker isolado antes de
-serem persistidas e o respetivo catálogo de modelos é sincronizado. Pesquisa,
-Chat e Análises continuam sem geração LLM nem dados financeiros.
+serem persistidas, o catálogo de modelos é sincronizado, uma combinação
+conta+modelo pode ser escolhida como predefinição global e a utilização
+account-wide de pedidos premium é atualizada através do SDK. Pesquisa, Chat e
+Análises continuam sem geração LLM nem dados financeiros.
 
 ## Stack
 
@@ -28,9 +30,10 @@ triggers globais em `auth.users` e não concedem membership automaticamente.
   ecrãs de telemóvel/tablet;
 - navegação para Início, Pesquisa, Chat, Análises e Administração;
 - administração numa página com tabs responsivas:
-  - **LLM:** validação real, revalidação manual/automática e descoberta de
-    modelos para GitHub Copilot; os restantes adapters continuam preparados
-    mas não podem ser ativados sem validação real;
+  - **LLM:** validação real, revalidação manual/automática, catálogo identificado
+    por fornecedor+conta, predefinição global e pedidos premium do GitHub
+    Copilot; os restantes adapters continuam preparados mas não podem ser
+    ativados sem validação real;
   - **Skills:** pesquisa paginada, criação manual, consulta, edição,
     duplicação, ativação, desativação, arquivo, restauro e eliminação
     definitiva reforçada;
@@ -138,6 +141,7 @@ docs/architecture.md
    4. `database/migrations/0004_github_copilot_provider.sql`;
    5. `database/migrations/0005_github_copilot_validation.sql`;
    6. `database/migrations/0006_preserve_transient_validation_catalog.sql`.
+   7. `database/migrations/0007_llm_defaults_and_provider_quota.sql`.
 
    A segunda migration cria `carcanhol.global_assumptions`,
    `carcanhol.skills`, índices, triggers locais de `updated_at`, a proteção
@@ -151,7 +155,11 @@ docs/architecture.md
    validação real, geração anti-stale, catálogo stale e RPCs service-only
    atómicas para conta+segredo+modelos e para revalidação. A sexta preserva o
    último catálogo e escolhas manuais em falhas transitórias de infraestrutura,
-   mantendo a conta bloqueada em `error`.
+   mantendo a conta bloqueada em `error`. A sétima redefine o antigo
+   `enabled` como espelho de atualidade para compatibilidade, cria a preferência
+   global transacional preparada para futuros scopes por funcionalidade e
+   persiste snapshots account-wide de quota por provider, sem prompts,
+   respostas ou eventos de sessão.
 
 4. Em **Project Settings → API → Exposed schemas**, adicionar `carcanhol`.
 
@@ -226,12 +234,39 @@ formulário manual. OAuth/GitHub App user-to-server será a opção recomendada
 para uma aplicação web multiutilizador. O acesso normal requer uma subscrição
 GitHub Copilot; BYOK é a exceção documentada pelo SDK.
 
-O catálogo sincronizado é apresentado integralmente na Administração, com os
-limites de prompt/contexto que o SDK disponibiliza. O GitHub não expõe um
-total account-wide de tokens consumidos ou restantes no ciclo para esta
-credencial. A quota experimental do SDK e as APIs de billing usam pedidos
-premium/AI credits, não tokens; a UI assinala a indisponibilidade em vez de
-mostrar uma estimativa enganadora ou exigir permissões adicionais.
+O catálogo sincronizado é apresentado integralmente na Administração. Cada
+modelo mostra sempre fornecedor e conta, além dos limites de prompt/contexto
+quando disponíveis. Modelos atuais de contas ativas podem ser escolhidos como
+predefinição global; uma troca é atómica por utilizador e uma conta/modelo
+eliminado, inativo ou stale limpa automaticamente a escolha. O schema reserva
+`scope = feature` para overrides futuros, mas não os expõe nesta entrega.
+
+Após descobrir os modelos, o worker chama também a operação oficial
+experimental `client.rpc.account.getQuota({ gitHubToken })` do
+`@github/copilot-sdk@1.0.14`/CLI 1.0.85 e usa apenas
+`quotaSnapshots.premium_interactions`. A UI chama corretamente à métrica
+**Pedidos premium**, nunca tokens. Mostra usados, incluídos/restantes quando a
+quota é finita, percentagem, overage e reset quando fornecidos; entitlement
+ilimitado e valores ausentes são representados sem inventar totais. O restante
+é derivado apenas para entitlement finito como
+`max(0, incluídos - usados)`. Uma falha
+de quota não invalida credencial nem catálogo: conserva o último snapshot como
+stale, ou mostra “Não disponível” quando nunca existiu um valor.
+Não são pedidas permissões adicionais: a operação usa a mesma credencial já
+validada para a conta.
+
+A atualização automática de conta/modelos/quota usa TTL de 15 minutos para
+evitar chamadas repetidas ao abrir a Administração; “Validar novamente” força
+uma atualização. O snapshot persiste por conta e capability
+`premium_requests`, permitindo outros providers no futuro sem fingir que
+Anthropic partilha a métrica do Copilot. Não são persistidos prompts, respostas
+ou utilização de sessões.
+
+Fontes oficiais do contrato pinned:
+
+- [SDK v1.0.14](https://github.com/github/copilot-sdk/releases/tag/v1.0.14);
+- [`account.getQuota` e tipos gerados](https://github.com/github/copilot-sdk/blob/v1.0.14/nodejs/src/generated/rpc.ts#L4975-L5040);
+- [guia Usage and billing](https://github.com/github/copilot-sdk/blob/v1.0.14/docs/features/usage-and-billing.md#L1139-L1173).
 
 ## Scripts
 

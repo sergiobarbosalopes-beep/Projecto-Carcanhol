@@ -6,7 +6,18 @@ import {
   type PermissionHandler,
   type SessionConfig,
 } from "@github/copilot-sdk";
+import {
+  copilotPremiumRequestsQuotaSchema,
+  type CopilotPremiumRequestsQuota,
+} from "./contract";
 import type { CopilotRuntimeClient, CopilotRuntimeFactory } from "./runtime";
+
+type AccountGetQuotaResult = Awaited<
+  ReturnType<CopilotClient["rpc"]["account"]["getQuota"]>
+>;
+type AccountQuotaSnapshot = NonNullable<
+  AccountGetQuotaResult["quotaSnapshots"][string]
+>;
 
 export const denyAllPermissions: PermissionHandler = () => ({
   kind: "reject",
@@ -79,13 +90,24 @@ class CopilotSdkRuntime implements CopilotRuntimeClient {
   ) {}
 
   async listModels(signal: AbortSignal) {
+    return listModelsWithSession(
+      this.client,
+      this.token,
+      this.sessionId,
+      signal
+    );
+  }
+
+  async getPremiumRequestsQuota(signal: AbortSignal) {
     try {
-      return await listModelsWithSession(
-        this.client,
-        this.token,
-        this.sessionId,
-        signal
-      );
+      signal.throwIfAborted();
+      const result = await this.client.rpc.account.getQuota({
+        gitHubToken: this.token,
+      });
+      signal.throwIfAborted();
+      return sanitizePremiumRequestsQuota(result);
+    } catch {
+      return unavailableQuota("provider_quota_unavailable");
     } finally {
       this.token = "";
     }
@@ -107,6 +129,103 @@ class CopilotSdkRuntime implements CopilotRuntimeClient {
       await removeTemporaryState(this.baseDirectory);
     }
   }
+}
+
+export function sanitizePremiumRequestsQuota(
+  result: AccountGetQuotaResult
+): CopilotPremiumRequestsQuota {
+  const snapshot = result.quotaSnapshots.premium_interactions;
+
+  if (!snapshot) {
+    return unavailableQuota("provider_quota_not_available");
+  }
+
+  return normalizeQuotaSnapshot(snapshot);
+}
+
+function normalizeQuotaSnapshot(
+  snapshot: AccountQuotaSnapshot
+): CopilotPremiumRequestsQuota {
+  const {
+    entitlementRequests,
+    isUnlimitedEntitlement,
+    overage,
+    overageAllowedWithExhaustedQuota,
+    remainingPercentage,
+    resetDate,
+    usageAllowedWithExhaustedQuota,
+    usedRequests,
+  } = snapshot;
+
+  if (
+    !Number.isSafeInteger(usedRequests) ||
+    usedRequests < 0 ||
+    !Number.isFinite(overage) ||
+    overage < 0 ||
+    !Number.isFinite(remainingPercentage) ||
+    remainingPercentage < 0 ||
+    remainingPercentage > 100 ||
+    (resetDate !== undefined && !isValidIsoDate(resetDate))
+  ) {
+    return unavailableQuota("malformed_provider_quota");
+  }
+
+  if (isUnlimitedEntitlement) {
+    return parseNormalizedQuota({
+      status: "available",
+      metric: "premium_requests",
+      isUnlimited: true,
+      usedRequests,
+      overageRequests: overage,
+      usageAllowedAfterLimit: usageAllowedWithExhaustedQuota,
+      overageAllowed: overageAllowedWithExhaustedQuota,
+      ...(resetDate ? { resetAt: resetDate } : {}),
+    });
+  }
+
+  if (!Number.isSafeInteger(entitlementRequests) || entitlementRequests < 0) {
+    return unavailableQuota("malformed_provider_quota");
+  }
+
+  return parseNormalizedQuota({
+    status: "available",
+    metric: "premium_requests",
+    isUnlimited: false,
+    usedRequests,
+    includedRequests: entitlementRequests,
+    remainingRequests: Math.max(0, entitlementRequests - usedRequests),
+    remainingPercentage,
+    overageRequests: overage,
+    usageAllowedAfterLimit: usageAllowedWithExhaustedQuota,
+    overageAllowed: overageAllowedWithExhaustedQuota,
+    ...(resetDate ? { resetAt: resetDate } : {}),
+  });
+}
+
+function parseNormalizedQuota(
+  value: CopilotPremiumRequestsQuota
+): CopilotPremiumRequestsQuota {
+  const parsed = copilotPremiumRequestsQuotaSchema.safeParse(value);
+  return parsed.success
+    ? parsed.data
+    : unavailableQuota("malformed_provider_quota");
+}
+
+function unavailableQuota(
+  errorCode:
+    | "provider_quota_unavailable"
+    | "provider_quota_not_available"
+    | "malformed_provider_quota"
+): CopilotPremiumRequestsQuota {
+  return {
+    status: "unavailable",
+    metric: "premium_requests",
+    errorCode,
+  };
+}
+
+function isValidIsoDate(value: string) {
+  return Number.isFinite(Date.parse(value));
 }
 
 export function createValidationSessionConfig(

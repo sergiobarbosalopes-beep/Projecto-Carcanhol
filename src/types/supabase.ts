@@ -87,6 +87,7 @@ export type LlmAccountPublic = Omit<
 > & {
   credential_hint: string;
   models: LlmAccountModelPublic[];
+  quota: LlmAccountQuotaPublic | null;
 };
 
 type LlmAccountSecret = {
@@ -124,42 +125,55 @@ export type LlmAccountModelPublic = Pick<
   | "id"
   | "provider_model_id"
   | "display_name"
-  | "enabled"
   | "is_stale"
   | "discovered_at"
   | "last_seen_at"
 > & {
+  is_default: boolean;
   capabilities: Json;
   policy: Json;
   billing: Json;
 };
 
-type LlmRoutingRule = {
+type LlmModelPreference = {
   id: string;
   user_id: string;
   account_model_id: string;
-  scope: "general" | "feature";
+  scope: "global" | "feature";
   feature_key: string | null;
-  fallback_order: number;
   created_at: string;
   updated_at: string;
 };
 
-type LlmUsageEvent = {
-  id: string;
-  user_id: string;
+export type LlmAccountQuota = {
   account_id: string;
-  account_model_id: string | null;
-  feature_key: string | null;
-  status: "succeeded" | "failed" | "cancelled";
-  input_tokens: number;
-  output_tokens: number;
-  latency_ms: number | null;
-  estimated_cost: number | null;
-  cost_currency: string | null;
-  occurred_at: string;
+  user_id: string;
+  provider: "github_copilot";
+  metric: "premium_requests";
+  status: "available" | "unavailable" | "stale";
+  is_unlimited: boolean | null;
+  included_requests: number | null;
+  used_requests: number | null;
+  remaining_requests: number | null;
+  remaining_percentage: number | null;
+  overage_requests: number | null;
+  usage_allowed_after_limit: boolean | null;
+  overage_allowed: boolean | null;
+  reset_at: string | null;
+  observed_at: string | null;
+  attempted_at: string;
+  error_code:
+    | "provider_quota_unavailable"
+    | "provider_quota_not_available"
+    | "malformed_provider_quota"
+    | "provider_validation_failed"
+    | "credential_changed"
+    | null;
   created_at: string;
+  updated_at: string;
 };
+
+export type LlmAccountQuotaPublic = Omit<LlmAccountQuota, "user_id">;
 
 export type Database = {
   carcanhol: {
@@ -247,25 +261,38 @@ export type Database = {
         >;
         Relationships: [];
       };
-      llm_routing_rules: {
-        Row: LlmRoutingRule;
-        Insert: Pick<LlmRoutingRule, "user_id" | "account_model_id" | "scope"> &
+      llm_model_preferences: {
+        Row: LlmModelPreference;
+        Insert: Pick<
+          LlmModelPreference,
+          "user_id" | "account_model_id" | "scope"
+        > &
           Partial<
             Omit<
-              LlmRoutingRule,
+              LlmModelPreference,
               "id" | "user_id" | "account_model_id" | "scope"
             >
           >;
-        Update: Partial<Omit<LlmRoutingRule, "id" | "user_id" | "created_at">>;
+        Update: Partial<
+          Omit<LlmModelPreference, "id" | "user_id" | "created_at">
+        >;
         Relationships: [];
       };
-      llm_usage_events: {
-        Row: LlmUsageEvent;
-        Insert: Pick<LlmUsageEvent, "user_id" | "account_id" | "status"> &
+      llm_account_quotas: {
+        Row: LlmAccountQuota;
+        Insert: Pick<
+          LlmAccountQuota,
+          "account_id" | "user_id" | "provider" | "metric" | "status"
+        > &
           Partial<
-            Omit<LlmUsageEvent, "id" | "user_id" | "account_id" | "status">
+            Omit<
+              LlmAccountQuota,
+              "account_id" | "user_id" | "provider" | "metric" | "status"
+            >
           >;
-        Update: Partial<Omit<LlmUsageEvent, "id" | "user_id" | "created_at">>;
+        Update: Partial<
+          Omit<LlmAccountQuota, "account_id" | "user_id" | "created_at">
+        >;
         Relationships: [];
       };
     };
@@ -288,6 +315,7 @@ export type Database = {
           p_key_version: string;
           p_validation_request_id: string;
           p_models: Json;
+          p_quota: Json;
         };
         Returns: LlmAccount[];
       };
@@ -319,8 +347,16 @@ export type Database = {
           p_succeeded: boolean;
           p_error_code: string | null;
           p_models: Json;
+          p_quota: Json | null;
         };
         Returns: boolean;
+      };
+      set_global_llm_default: {
+        Args: {
+          p_user_id: string;
+          p_account_model_id: string;
+        };
+        Returns: string;
       };
       rotate_llm_account_secret: {
         Args: {

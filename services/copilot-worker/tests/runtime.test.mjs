@@ -5,6 +5,7 @@ import {
   sanitizeCopilotModels,
   validateCopilotCredential,
 } from "../dist/runtime.js";
+import { sanitizePremiumRequestsQuota } from "../dist/copilot-adapter.js";
 
 const requestId = "d510ccb5-22af-47b5-9280-3b605aac4c68";
 const token = `github_pat_${"S".repeat(40)}`;
@@ -16,6 +17,142 @@ const sessionBuilderError = {
     "SDK session authentication failed: network fetch failed: request failed: builder error",
   data: { code: "UNCLASSIFIED_PROVIDER_CODE" },
 };
+
+test("normalizes finite premium-request quota without negative values", () => {
+  assert.deepEqual(
+    sanitizePremiumRequestsQuota({
+      quotaSnapshots: {
+        premium_interactions: {
+          isUnlimitedEntitlement: false,
+          entitlementRequests: 300,
+          usedRequests: 75,
+          usageAllowedWithExhaustedQuota: true,
+          remainingPercentage: 75,
+          overage: 2,
+          overageAllowedWithExhaustedQuota: true,
+          resetDate: "2026-10-01T00:00:00Z",
+        },
+      },
+    }),
+    {
+      status: "available",
+      metric: "premium_requests",
+      isUnlimited: false,
+      usedRequests: 75,
+      includedRequests: 300,
+      remainingRequests: 225,
+      remainingPercentage: 75,
+      overageRequests: 2,
+      usageAllowedAfterLimit: true,
+      overageAllowed: true,
+      resetAt: "2026-10-01T00:00:00Z",
+    }
+  );
+});
+
+test("represents unlimited, absent, and malformed quota honestly", () => {
+  const unlimited = sanitizePremiumRequestsQuota({
+    quotaSnapshots: {
+      premium_interactions: {
+        isUnlimitedEntitlement: true,
+        entitlementRequests: -1,
+        usedRequests: 18,
+        usageAllowedWithExhaustedQuota: true,
+        remainingPercentage: 100,
+        overage: 0,
+        overageAllowedWithExhaustedQuota: false,
+      },
+    },
+  });
+
+  assert.deepEqual(unlimited, {
+    status: "available",
+    metric: "premium_requests",
+    isUnlimited: true,
+    usedRequests: 18,
+    overageRequests: 0,
+    usageAllowedAfterLimit: true,
+    overageAllowed: false,
+  });
+  assert.deepEqual(sanitizePremiumRequestsQuota({ quotaSnapshots: {} }), {
+    status: "unavailable",
+    metric: "premium_requests",
+    errorCode: "provider_quota_not_available",
+  });
+  assert.deepEqual(
+    sanitizePremiumRequestsQuota({
+      quotaSnapshots: {
+        premium_interactions: {
+          isUnlimitedEntitlement: false,
+          entitlementRequests: 100,
+          usedRequests: -1,
+          usageAllowedWithExhaustedQuota: false,
+          remainingPercentage: 101,
+          overage: -2,
+          overageAllowedWithExhaustedQuota: false,
+        },
+      },
+    }),
+    {
+      status: "unavailable",
+      metric: "premium_requests",
+      errorCode: "malformed_provider_quota",
+    }
+  );
+});
+
+test("quota failure does not fail a valid model catalog", async () => {
+  const result = await validateCopilotCredential({
+    token,
+    requestId,
+    timeoutMs: 1_000,
+    createRuntime: async () => ({
+      async listModels() {
+        return [{ id: "gpt-5", name: "GPT-5" }];
+      },
+      async getPremiumRequestsQuota() {
+        throw new Error(token);
+      },
+      async close() {},
+    }),
+  });
+
+  assert.equal(result.ok, true);
+
+  if (result.ok) {
+    assert.deepEqual(result.quota, {
+      status: "unavailable",
+      metric: "premium_requests",
+      errorCode: "provider_quota_unavailable",
+    });
+  }
+
+  assert.equal(JSON.stringify(result).includes(token), false);
+});
+
+test("a hanging quota call is bounded without invalidating models", async () => {
+  const result = await validateCopilotCredential({
+    token,
+    requestId,
+    timeoutMs: 550,
+    createRuntime: async () => ({
+      async listModels() {
+        return [{ id: "gpt-5", name: "GPT-5" }];
+      },
+      async getPremiumRequestsQuota() {
+        return new Promise(() => undefined);
+      },
+      async close() {},
+    }),
+  });
+
+  assert.equal(result.ok, true);
+
+  if (result.ok) {
+    assert.equal(result.quota.status, "unavailable");
+    assert.equal(result.quota.errorCode, "provider_quota_unavailable");
+  }
+});
 
 test("sanitizes and bounds the official model metadata fields", () => {
   const models = sanitizeCopilotModels([

@@ -1,6 +1,21 @@
 export const AUTO_VALIDATION_MAX_ACCOUNTS = 20;
 export const AUTO_VALIDATION_CONCURRENCY = 2;
 export const AUTO_VALIDATION_TIMEOUT_MS = 60_000;
+export const LLM_ACCOUNT_REFRESH_TTL_MS = 15 * 60_000;
+
+export function isAutomaticLlmRefreshDue(
+  attemptedAt: string | null,
+  now = Date.now()
+) {
+  if (!attemptedAt) {
+    return true;
+  }
+
+  const timestamp = Date.parse(attemptedAt);
+  return (
+    !Number.isFinite(timestamp) || now - timestamp >= LLM_ACCOUNT_REFRESH_TTL_MS
+  );
+}
 
 export function createRequestCoalescer<T>() {
   const requests = new Map<string, Promise<T>>();
