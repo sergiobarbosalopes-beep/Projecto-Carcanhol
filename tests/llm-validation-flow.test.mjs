@@ -248,6 +248,21 @@ test("migration atomically enforces owned eligible global defaults and quota lif
   assert.doesNotMatch(route, /body\.userId|input\.data\.userId/);
 });
 
+test("authenticated and service clients share the allowlisted database schema", () => {
+  const databaseSource = readFileSync(
+    new URL("../src/database/server.ts", import.meta.url),
+    "utf8"
+  );
+  const envSource = readFileSync(
+    new URL("../src/utils/env.ts", import.meta.url),
+    "utf8"
+  );
+
+  assert.match(databaseSource, /getDatabaseEnv\(\)/);
+  assert.match(databaseSource, /schema: SUPABASE_SCHEMA as "carcanhol"/g);
+  assert.match(envSource, /\^carcanhol\(\?:_\[a-z0-9_\]\{1,40\}\)\?\$/);
+});
+
 test("LLM cards expose accessible manual and automatic validation states", () => {
   const panel = readFileSync(
     new URL("../app/(protected)/administracao/llm-panel.tsx", import.meta.url),

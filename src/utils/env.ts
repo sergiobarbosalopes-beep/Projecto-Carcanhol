@@ -22,6 +22,16 @@ const authEnvSchema = z.object({
   }),
 });
 
+const databaseEnvSchema = z.object({
+  SUPABASE_SCHEMA: z
+    .string()
+    .regex(/^carcanhol(?:_[a-z0-9_]{1,40})?$/, {
+      message:
+        "SUPABASE_SCHEMA must be carcanhol or an isolated carcanhol_* preview schema",
+    })
+    .default("carcanhol"),
+});
+
 const encryptionKeySchema = z.string().transform((value, context) => {
   try {
     return parseBase64EncryptionKey(value);
@@ -39,7 +49,7 @@ const serverEnvSchema = z.object({
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1, {
     message: "SUPABASE_SERVICE_ROLE_KEY is required",
   }),
-  SUPABASE_SCHEMA: z.literal("carcanhol").default("carcanhol"),
+  SUPABASE_SCHEMA: databaseEnvSchema.shape.SUPABASE_SCHEMA,
   LLM_CREDENTIAL_ENCRYPTION_KEY: encryptionKeySchema,
   LLM_CREDENTIAL_ENCRYPTION_KEY_VERSION: z
     .string()
@@ -135,6 +145,21 @@ export function getAuthEnv() {
   if (!parsed.success) {
     throw new Error(
       `Invalid authentication environment variables: ${parsed.error.message}`
+    );
+  }
+
+  return parsed.data;
+}
+
+/** Allowlisted PostgREST schema used by both authenticated and service clients. */
+export function getDatabaseEnv() {
+  const parsed = databaseEnvSchema.safeParse({
+    SUPABASE_SCHEMA: process.env.SUPABASE_SCHEMA,
+  });
+
+  if (!parsed.success) {
+    throw new Error(
+      `Invalid database environment variables: ${parsed.error.message}`
     );
   }
 

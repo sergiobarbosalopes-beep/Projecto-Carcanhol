@@ -119,6 +119,9 @@ docs/architecture.md
    COPILOT_WORKER_TIMEOUT_MS=30000
    ```
 
+   O valor normal é `carcanhol`; deployments de preview isolados podem usar
+   temporariamente um schema allowlisted com prefixo `carcanhol_`.
+
    `NEXT_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`,
    `LLM_CREDENTIAL_ENCRYPTION_KEY` e `COPILOT_WORKER_HMAC_SECRET` são
    server-only e nunca devem receber o prefixo `NEXT_PUBLIC_`.
