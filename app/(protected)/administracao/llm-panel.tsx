@@ -1339,9 +1339,11 @@ function QuotaDetails({ account }: { account: LlmAccountPublic }) {
         <Metadata label="Unidades adicionais">
           {formatOptionalCount(quota.overage_units)}
         </Metadata>
-        <Metadata label="Próxima reposição">
-          {formatOptionalDate(quota.reset_at)}
-        </Metadata>
+        {quota.reset_at !== null && (
+          <Metadata label="Próxima reposição">
+            {formatOptionalDate(quota.reset_at)}
+          </Metadata>
+        )}
         <Metadata label="Última observação" wide>
           {formatOptionalDate(quota.observed_at)}
         </Metadata>

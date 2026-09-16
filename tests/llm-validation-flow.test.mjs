@@ -294,6 +294,7 @@ test("LLM cards expose accessible manual and automatic validation states", () =>
   assert.match(panel, /créditos de IA ou\s+pedidos/);
   assert.match(panel, /Percentagem restante/);
   assert.match(panel, /Próxima reposição/);
+  assert.match(panel, /quota\.reset_at !== null/);
   assert.match(panel, /account-wide/);
   assert.match(panel, /Ilimitados/);
   assert.match(panel, /Desatualizado/);
