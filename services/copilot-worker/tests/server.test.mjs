@@ -3,6 +3,7 @@ import { once } from "node:events";
 import test from "node:test";
 import {
   COPILOT_HEALTH_PATH,
+  COPILOT_INFERENCE_PATH,
   COPILOT_VALIDATION_PATH,
 } from "../dist/contract.js";
 import { createSignedWorkerHeaders } from "../dist/request-auth.js";
@@ -12,6 +13,99 @@ import { createCopilotWorkerServer } from "../dist/server.js";
 const secret = Buffer.alloc(32, 23);
 const token = `github_pat_${"T".repeat(40)}`;
 const internalFailureMessage = "copilot worker failed internally";
+
+test("serves only signed, replay-protected inference requests without browser origins", async () => {
+  const calls = [];
+  const server = createCopilotWorkerServer({
+    hmacSecret: secret,
+    validate: async ({ requestId }) => ({
+      ok: false,
+      requestId,
+      code: "unknown",
+    }),
+    infer: async (request) => {
+      calls.push(request);
+      return {
+        ok: true,
+        requestId: request.requestId,
+        text: "Lisboa",
+        durationMs: 12,
+      };
+    },
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+
+  try {
+    const address = server.address();
+    assert.equal(typeof address, "object");
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const requestId = "c5d20776-84ba-474f-9703-f49220ca31be";
+    const body = JSON.stringify({
+      requestId,
+      token,
+      model: "claude-haiku-4.5",
+      prompt: "Qual é a capital de Portugal?",
+    });
+    const headers = createSignedWorkerHeaders({
+      body,
+      method: "POST",
+      path: COPILOT_INFERENCE_PATH,
+      requestId,
+      secret,
+    });
+    const response = await fetch(`${baseUrl}${COPILOT_INFERENCE_PATH}`, {
+      method: "POST",
+      body,
+      headers: { ...headers, "Content-Type": "application/json" },
+    });
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      ok: true,
+      requestId,
+      text: "Lisboa",
+      durationMs: 12,
+    });
+    assert.equal(calls.length, 1);
+
+    const replay = await fetch(`${baseUrl}${COPILOT_INFERENCE_PATH}`, {
+      method: "POST",
+      body,
+      headers: { ...headers, "Content-Type": "application/json" },
+    });
+    assert.equal(replay.status, 401);
+
+    const browserRequestId = "763573d7-3459-44eb-b215-a5def55a3883";
+    const browserBody = JSON.stringify({
+      requestId: browserRequestId,
+      token,
+      model: "claude-haiku-4.5",
+      prompt: "blocked",
+    });
+    const browserHeaders = createSignedWorkerHeaders({
+      body: browserBody,
+      method: "POST",
+      path: COPILOT_INFERENCE_PATH,
+      requestId: browserRequestId,
+      secret,
+    });
+    const browser = await fetch(`${baseUrl}${COPILOT_INFERENCE_PATH}`, {
+      method: "POST",
+      body: browserBody,
+      headers: {
+        ...browserHeaders,
+        "Content-Type": "application/json",
+        Origin: "https://example.com",
+      },
+    });
+    assert.equal(browser.status, 403);
+    assert.equal(calls.length, 1);
+  } finally {
+    server.close();
+    await once(server, "close");
+  }
+});
 
 test("serves health without details and validates only authenticated strict requests", async () => {
   const server = createCopilotWorkerServer({

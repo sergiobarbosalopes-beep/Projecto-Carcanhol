@@ -4,14 +4,16 @@ Aplicação Next.js de apoio à decisão de investimento, preparada para combina
 dados financeiros reais com análise assistida por IA. A arquitetura completa
 está em [`docs/architecture.md`](docs/architecture.md).
 
-**Estado atual: Fase 3C — predefinição e quota LLM.** A aplicação inclui
+**Estado atual: Fase 3D — probe de inferência LLM.** A aplicação inclui
 autenticação server-side, navegação protegida, gestão de conta, premissas
 globais, Skills manuais e configuração segura de várias contas LLM por
 utilizador. Contas GitHub Copilot são autenticadas num worker isolado antes de
 serem persistidas, o catálogo de modelos é sincronizado, uma combinação
 conta+modelo pode ser escolhida como predefinição global e a utilização
 account-wide disponibilizada pelo GitHub Copilot é atualizada através do SDK.
-Pesquisa, Chat e Análises continuam sem geração LLM nem dados financeiros.
+Inclui ainda um endpoint BFF mínimo de inferência one-shot, sem UI nem
+persistência de prompt/resposta/sessão. Pesquisa, Chat e Análises continuam
+sem geração LLM integrada nem dados financeiros.
 
 ## Stack
 
@@ -67,6 +69,7 @@ app/
     admin/premises/            Premissas globais
     admin/skills/              CRUD e lifecycle de Skills
     admin/llm-accounts/        Criação/revalidação e rotação de contas LLM
+    llm/infer/                 Inferência one-shot autenticada
 services/
   copilot-worker/              Runtime SDK isolado, HTTP/HMAC e container
 src/
@@ -85,6 +88,8 @@ database/migrations/
   0004_github_copilot_provider.sql
   0005_github_copilot_validation.sql
   0006_preserve_transient_validation_catalog.sql
+  0007_llm_defaults_and_provider_quota.sql
+  0008_llm_inference_default.sql
 docs/architecture.md
 ```
 
@@ -145,6 +150,7 @@ docs/architecture.md
    5. `database/migrations/0005_github_copilot_validation.sql`;
    6. `database/migrations/0006_preserve_transient_validation_catalog.sql`.
    7. `database/migrations/0007_llm_defaults_and_provider_quota.sql`.
+   8. `database/migrations/0008_llm_inference_default.sql`.
 
    A segunda migration cria `carcanhol.global_assumptions`,
    `carcanhol.skills`, índices, triggers locais de `updated_at`, a proteção
@@ -164,6 +170,9 @@ docs/architecture.md
    preparada para futuros scopes por funcionalidade e persiste snapshots
    account-wide de quota por provider, sem prompts, respostas ou eventos de
    sessão.
+   A oitava adiciona a RPC service-only que volta a confirmar atomicamente a
+   predefinição selecionada sob RLS pelo BFF, a conta ativa, a última validação
+   bem-sucedida e o modelo não stale antes de devolver o envelope cifrado.
 
 4. Em **Project Settings → API → Exposed schemas**, adicionar `carcanhol`.
 
@@ -263,6 +272,31 @@ invalida credencial nem catálogo: conserva o último snapshot como stale, ou
 mostra “Não disponível” quando nunca existiu um valor.
 Não são pedidas permissões adicionais: a operação usa a mesma credencial já
 validada para a conta.
+
+### Probe one-shot de inferência
+
+`POST /api/llm/infer` aceita exclusivamente JSON `{ "prompt": string }`, com
+até 500 caracteres, e exige origin same-site, sessão/membership e rate limits
+por utilizador e IP. O browser nunca escolhe conta, modelo ou token. O BFF lê
+sob RLS a única preferência global do utilizador e uma RPC acessível apenas à
+service role volta a confirmar, na mesma query, ownership, preferência,
+provider GitHub Copilot, conta ativa, validação bem-sucedida e modelo não
+stale. Só então o envelope é decifrado durante o pedido.
+
+O worker recebe `token`, `model`, `prompt` e `requestId` num body HMAC assinado
+para o path allowlisted `/v1/copilot/infer`. Rejeita `Origin`, replay, bodies
+acima de 8 KiB e schemas com campos adicionais. A sessão efémera fixa o modelo
+selecionado pelo servidor, desativa tools, MCP, agents, skills, memory, store,
+file tracking, streaming e telemetria, e termina com `abort` em timeout,
+`disconnect`, `deleteSession`, `client.stop`/`forceStop` e remoção do diretório
+temporário. A resposta contém apenas texto até 4 096 caracteres, duração e,
+quando válidos, contadores de input/output tokens. Prompt, resposta, sessão,
+token, HMAC e erros raw do provider nunca são registados ou persistidos.
+
+O prompt autorizado para um futuro smoke test é
+`Qual é a capital de Portugal?`. Este repositório não o executa contra
+produção; qualquer teste real continua a exigir autorização e credenciais de
+preview explicitamente seguras.
 
 A atualização automática de conta/modelos/quota usa TTL de 15 minutos para
 evitar chamadas repetidas ao abrir a Administração; “Validar novamente” força

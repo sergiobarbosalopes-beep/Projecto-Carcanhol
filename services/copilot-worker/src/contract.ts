@@ -14,11 +14,14 @@ export {
 } from "./network-error";
 
 export const COPILOT_VALIDATION_PATH = "/v1/copilot/validate";
+export const COPILOT_INFERENCE_PATH = "/v1/copilot/infer";
 export const COPILOT_HEALTH_PATH = "/health";
 export const COPILOT_WORKER_MAX_BODY_BYTES = 8 * 1024;
 export const COPILOT_WORKER_MAX_RESPONSE_BYTES = 256 * 1024;
 export const COPILOT_WORKER_MAX_MODELS = 100;
 export const COPILOT_TOKEN_MAX_LENGTH = 4096;
+export const COPILOT_INFERENCE_MAX_PROMPT_LENGTH = 500;
+export const COPILOT_INFERENCE_MAX_TEXT_LENGTH = 4_096;
 export const COPILOT_QUOTA_ERROR_CODES = [
   "provider_quota_unavailable",
   "provider_quota_not_available",
@@ -495,6 +498,79 @@ export const copilotValidationRequestSchema = z
 
 export type CopilotValidationRequest = z.infer<
   typeof copilotValidationRequestSchema
+>;
+
+export const copilotInferencePromptSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(COPILOT_INFERENCE_MAX_PROMPT_LENGTH)
+  .refine(
+    (value) => !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value),
+    {
+      message: "Prompt contains unsupported control characters.",
+    }
+  );
+
+export const copilotInferenceRequestSchema = z
+  .object({
+    requestId: z.string().uuid(),
+    token: z
+      .string()
+      .min(8)
+      .max(COPILOT_TOKEN_MAX_LENGTH)
+      .regex(/^github_pat_[A-Za-z0-9_]{20,255}$/),
+    model: boundedLabelSchema,
+    prompt: copilotInferencePromptSchema,
+  })
+  .strict();
+
+export type CopilotInferenceRequest = z.infer<
+  typeof copilotInferenceRequestSchema
+>;
+
+const inferenceUsageSchema = z
+  .object({
+    inputTokens: z.number().int().nonnegative().max(10_000_000),
+    outputTokens: z.number().int().nonnegative().max(10_000_000),
+  })
+  .strict();
+
+const successfulInferenceSchema = z
+  .object({
+    ok: z.literal(true),
+    requestId: z.string().uuid(),
+    text: z.string().min(1).max(COPILOT_INFERENCE_MAX_TEXT_LENGTH),
+    usage: inferenceUsageSchema.optional(),
+    durationMs: z.number().int().nonnegative().max(120_000),
+  })
+  .strict();
+
+const inferenceFailureSchema = z
+  .object({
+    ok: z.literal(false),
+    requestId: z.string().uuid(),
+    code: z.enum(["timeout", "unavailable", "invalid_response"]),
+    diagnostic: safeCopilotWorkerInternalDiagnosticSchema.optional(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.diagnostic && value.diagnostic.requestId !== value.requestId) {
+      context.addIssue({
+        code: "custom",
+        path: ["diagnostic", "requestId"],
+        message: "Diagnostic requestId must match the response requestId.",
+      });
+    }
+  });
+
+export const copilotInferenceResponseSchema = z.union([
+  successfulInferenceSchema,
+  inferenceFailureSchema,
+]);
+
+export type CopilotInferenceResponse = z.infer<
+  typeof copilotInferenceResponseSchema
 >;
 
 const successfulValidationSchema = z

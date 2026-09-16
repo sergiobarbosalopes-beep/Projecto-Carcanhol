@@ -6,6 +6,8 @@ const NO_STORE_HEADERS = {
   "Cache-Control": "no-store",
 };
 
+export class RequestBodyTooLargeError extends Error {}
+
 export function jsonSuccess<T>(data: T, status = 200) {
   return NextResponse.json(data, {
     status,
@@ -64,4 +66,42 @@ export function isSameOrigin(request: Request): boolean {
 
 export function rejectCrossOrigin(request: Request) {
   return isSameOrigin(request) ? null : jsonError("Pedido inválido.", 403);
+}
+
+export async function readBoundedRequestBody(
+  request: Request,
+  maxBytes: number
+): Promise<string> {
+  const declaredLength = Number(request.headers.get("content-length"));
+
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    throw new RequestBodyTooLargeError();
+  }
+
+  if (!request.body) {
+    return "";
+  }
+
+  const reader = request.body.getReader();
+  const decoder = new TextDecoder();
+  let body = "";
+  let total = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+
+    if (done) {
+      body += decoder.decode();
+      return body;
+    }
+
+    total += value.byteLength;
+
+    if (total > maxBytes) {
+      await reader.cancel();
+      throw new RequestBodyTooLargeError();
+    }
+
+    body += decoder.decode(value, { stream: true });
+  }
 }

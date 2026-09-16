@@ -1,4 +1,7 @@
-import { createCopilotSdkRuntime } from "./copilot-adapter";
+import {
+  createCopilotSdkRuntime,
+  runCopilotInference,
+} from "./copilot-adapter";
 import { getWorkerConfig } from "./config";
 import type { SafeCopilotDiagnostic } from "./contract";
 import { createRedisReplayStore } from "./redis-replay-store";
@@ -18,6 +21,7 @@ const server = createCopilotWorkerServer({
   maxQueue: config.COPILOT_WORKER_MAX_QUEUE,
   healthTimeoutMs: config.COPILOT_REPLAY_STORE_TIMEOUT_MS,
   validationDeadlineMs: config.COPILOT_VALIDATION_TIMEOUT_MS,
+  inferenceDeadlineMs: config.COPILOT_INFERENCE_TIMEOUT_MS,
   replayStore,
   onDiagnostic: logDiagnostic,
   validate: async ({ requestId, token }, signal) => {
@@ -39,9 +43,23 @@ const server = createCopilotWorkerServer({
 
     return result;
   },
+  infer: async ({ requestId, token, model, prompt }, signal) => {
+    return runCopilotInference({
+      token,
+      model,
+      prompt,
+      requestId,
+      timeoutMs: config.COPILOT_INFERENCE_TIMEOUT_MS,
+      signal,
+    });
+  },
 });
 
-server.requestTimeout = config.COPILOT_VALIDATION_TIMEOUT_MS + 5_000;
+server.requestTimeout =
+  Math.max(
+    config.COPILOT_VALIDATION_TIMEOUT_MS,
+    config.COPILOT_INFERENCE_TIMEOUT_MS
+  ) + 5_000;
 server.headersTimeout = 10_000;
 server.keepAliveTimeout = 5_000;
 server.maxHeadersCount = 32;
