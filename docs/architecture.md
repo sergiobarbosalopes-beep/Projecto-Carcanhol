@@ -281,6 +281,13 @@ em memória na criação da sessão, nunca por URL ou ficheiro. Não existe prom
 e qualquer permission request
 futura terá `availableTools: []` e `denyAllPermissions`.
 
+O child nativo recebe apenas `HOME`/`TMP*` apontados ao diretório efémero,
+`PATH` quando definido e `SystemRoot` exclusivamente em Windows. Proxy e CA
+provenientes do ambiente do container (`HTTP(S)_PROXY`, `NO_PROXY`,
+`NODE_EXTRA_CA_CERTS`, `SSL_CERT_*`) não são herdados, evitando que o
+transporte Rust/reqwest tente interpretar configuração destinada ao processo
+Node.
+
 ```text
 Browser
   │ sessão Carcanhol

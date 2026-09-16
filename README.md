@@ -274,7 +274,9 @@ GitHub Copilot; BYOK é a exceção documentada pelo SDK.
   janela temporal e Redis partilhado com claim atómico contra replay.
 - O worker recebe apenas token e request-id, limita body/concurrency/timeout,
   rejeita CORS e prompts/tools, usa `mode: "empty"` e remove o diretório
-  temporário depois de cada validação.
+  temporário depois de cada validação. O child nativo herda apenas esse
+  diretório, `PATH` e, em Windows, `SystemRoot`; proxy/CA do container não são
+  propagados.
 - Falhas definitivas de credencial/entitlement/política/modelos mudam a conta
   para `invalid` e marcam o catálogo anterior stale/desativado. Falhas
   transitórias de worker/Redis mudam a conta para `error`, bloqueiam execução,

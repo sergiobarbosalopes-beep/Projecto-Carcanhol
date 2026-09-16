@@ -25,19 +25,76 @@ test("denies every future session permission request", () => {
   );
 });
 
-test("does not inherit application secrets into the Copilot child process", () => {
-  const environment = buildChildRuntimeEnvironment("C:\\safe-temp", {
+test("inherits only portable runtime paths into the Copilot child process", () => {
+  const sourceEnvironment = {
     PATH: "safe-path",
+    SystemRoot: "C:\\Windows",
+    HTTPS_PROXY: "https://proxy.example",
+    HTTP_PROXY: "http://proxy.example",
+    NO_PROXY: "localhost",
+    NODE_EXTRA_CA_CERTS: "C:\\certs\\corporate.pem",
+    SSL_CERT_DIR: "C:\\certs",
+    SSL_CERT_FILE: "C:\\certs\\bundle.pem",
     COPILOT_WORKER_HMAC_SECRET: "must-not-pass",
     SUPABASE_SERVICE_ROLE_KEY: "must-not-pass",
     LLM_CREDENTIAL_ENCRYPTION_KEY: "must-not-pass",
+    UNDEFINED_VALUE: undefined,
+  };
+  const linuxEnvironment = buildChildRuntimeEnvironment(
+    "/safe-temp",
+    sourceEnvironment,
+    "linux"
+  );
+  const windowsEnvironment = buildChildRuntimeEnvironment(
+    "C:\\safe-temp",
+    sourceEnvironment,
+    "win32"
+  );
+
+  assert.deepEqual(linuxEnvironment, {
+    HOME: "/safe-temp",
+    TMPDIR: "/safe-temp",
+    TEMP: "/safe-temp",
+    TMP: "/safe-temp",
+    PATH: "safe-path",
+  });
+  assert.deepEqual(windowsEnvironment, {
+    HOME: "C:\\safe-temp",
+    TMPDIR: "C:\\safe-temp",
+    TEMP: "C:\\safe-temp",
+    TMP: "C:\\safe-temp",
+    PATH: "safe-path",
+    SystemRoot: "C:\\Windows",
   });
 
-  assert.equal(environment.PATH, "safe-path");
-  assert.equal(environment.HOME, "C:\\safe-temp");
-  assert.equal("COPILOT_WORKER_HMAC_SECRET" in environment, false);
-  assert.equal("SUPABASE_SERVICE_ROLE_KEY" in environment, false);
-  assert.equal("LLM_CREDENTIAL_ENCRYPTION_KEY" in environment, false);
+  for (const environment of [linuxEnvironment, windowsEnvironment]) {
+    for (const forbidden of [
+      "HTTPS_PROXY",
+      "HTTP_PROXY",
+      "NO_PROXY",
+      "NODE_EXTRA_CA_CERTS",
+      "SSL_CERT_DIR",
+      "SSL_CERT_FILE",
+      "COPILOT_WORKER_HMAC_SECRET",
+      "SUPABASE_SERVICE_ROLE_KEY",
+      "LLM_CREDENTIAL_ENCRYPTION_KEY",
+      "UNDEFINED_VALUE",
+    ]) {
+      assert.equal(forbidden in environment, false, forbidden);
+    }
+
+    assert.equal(
+      Object.values(environment).every((value) => typeof value === "string"),
+      true
+    );
+  }
+
+  assert.deepEqual(buildChildRuntimeEnvironment("/safe-temp", {}, "linux"), {
+    HOME: "/safe-temp",
+    TMPDIR: "/safe-temp",
+    TEMP: "/safe-temp",
+    TMP: "/safe-temp",
+  });
 });
 
 test("fails closed if database or encryption secrets reach the worker", () => {

@@ -192,27 +192,25 @@ export async function listModelsWithSession(
 
 export function buildChildRuntimeEnvironment(
   baseDirectory: string,
-  sourceEnvironment: NodeJS.ProcessEnv = process.env
+  sourceEnvironment: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform
 ) {
-  const allowedKeys = [
-    "HTTPS_PROXY",
-    "HTTP_PROXY",
-    "NO_PROXY",
-    "NODE_EXTRA_CA_CERTS",
-    "PATH",
-    "SSL_CERT_DIR",
-    "SSL_CERT_FILE",
-    "SystemRoot",
-  ] as const;
-  const environment: Record<string, string | undefined> = {
+  const environment: Record<string, string> = {
     HOME: baseDirectory,
     TMPDIR: baseDirectory,
     TEMP: baseDirectory,
     TMP: baseDirectory,
   };
+  const path = sourceEnvironment.PATH;
 
-  for (const key of allowedKeys) {
-    environment[key] = sourceEnvironment[key];
+  if (typeof path === "string") {
+    environment.PATH = path;
+  }
+
+  const systemRoot = sourceEnvironment.SystemRoot;
+
+  if (platform === "win32" && typeof systemRoot === "string") {
+    environment.SystemRoot = systemRoot;
   }
 
   return environment;

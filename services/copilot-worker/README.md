@@ -121,7 +121,10 @@ código.
 O token chega apenas no body HTTPS assinado e é entregue ao SDK em memória
 como `SessionConfig.gitHubToken`; nunca é usado em URL, log, erro, ficheiro ou
 telemetria da aplicação. O ambiente do child process é uma allowlist que
-exclui o token, o segredo HMAC e quaisquer chaves Supabase/cifragem.
+contém apenas os diretórios `HOME`/`TMP*` isolados, `PATH` quando definido e
+`SystemRoot` apenas em Windows. Variáveis `HTTP_PROXY`, `HTTPS_PROXY`,
+`NO_PROXY`, `NODE_EXTRA_CA_CERTS` e `SSL_CERT_*` não são herdadas pelo runtime
+nativo, nem são criadas chaves com valor `undefined`.
 
 ## Executar
 
