@@ -13,9 +13,13 @@ export function jsonSuccess<T>(data: T, status = 200) {
   });
 }
 
-export function jsonError(message: string, status: number) {
+export function jsonError(
+  message: string,
+  status: number,
+  details: Record<string, unknown> = {}
+) {
   return NextResponse.json(
-    { error: message },
+    { ...details, error: message },
     {
       status,
       headers: NO_STORE_HEADERS,

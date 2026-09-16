@@ -22,14 +22,29 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install Copilot worker dependencies
+        run: npm ci --prefix services/copilot-worker
+
       - name: Test
         run: npm test
 
       - name: Lint
         run: npm run lint
 
+      - name: Check formatting
+        run: npm run format:check
+
       - name: Type-check
         run: npm run type-check
+
+      - name: Build Copilot worker
+        run: npm run worker:build
+
+      - name: Build Copilot worker container
+        run: docker build --tag carcanhol-copilot-worker:ci --file services/copilot-worker/Dockerfile.vercel services/copilot-worker
+
+      - name: Verify Copilot worker CA bundle
+        run: docker run --rm --entrypoint /bin/sh carcanhol-copilot-worker:ci -c 'test -s /etc/ssl/certs/ca-certificates.crt'
 
       - name: Build
         run: npm run build
@@ -43,3 +58,6 @@ jobs:
           SUPABASE_SCHEMA: "carcanhol"
           LLM_CREDENTIAL_ENCRYPTION_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
           LLM_CREDENTIAL_ENCRYPTION_KEY_VERSION: "ci-placeholder"
+          COPILOT_WORKER_URL: "https://copilot-worker.internal.example"
+          COPILOT_WORKER_HMAC_SECRET: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+          COPILOT_WORKER_TIMEOUT_MS: "30000"

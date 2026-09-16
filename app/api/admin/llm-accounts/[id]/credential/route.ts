@@ -75,5 +75,7 @@ export async function PUT(
     }
 
     return jsonError("Não foi possível substituir a credencial LLM.", 500);
+  } finally {
+    input.data.credential = "";
   }
 }

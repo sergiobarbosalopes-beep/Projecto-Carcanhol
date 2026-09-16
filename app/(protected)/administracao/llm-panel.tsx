@@ -1,6 +1,11 @@
 "use client";
 
-import { useId, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import {
+  AUTO_VALIDATION_MAX_ACCOUNTS,
+  createRequestCoalescer,
+  runBoundedAccountValidation,
+} from "@/src/admin/llm-auto-validation";
 import {
   LLM_ACCOUNT_NAME_MAX_LENGTH,
   LLM_CREDENTIAL_MAX_LENGTH,
@@ -9,6 +14,10 @@ import {
   getLlmCredentialError,
   isManuallyManagedLlmCredentialType,
 } from "@/src/admin/llm-validation";
+import {
+  getLlmValidationGuidance,
+  isTransientLlmValidationError,
+} from "@/src/admin/llm-validation-guidance";
 import type {
   LlmAccountPublic,
   LlmAccountStatus,
@@ -49,7 +58,10 @@ const PROVIDER_DETAILS: Record<
 
 const STATUS_LABELS: Record<LlmAccountStatus, string> = {
   pending_validation: "Por validar",
-  inactive: "Inativa",
+  active: "Ativa",
+  invalid: "Requer atenção",
+  error: "Requer atenção",
+  inactive: "Requer atenção",
 };
 
 const CREDENTIAL_TYPE_LABELS: Record<LlmCredentialType, string> = {
@@ -67,18 +79,147 @@ type AccountAction = {
   accountId: string;
 } | null;
 
-type Feedback = { kind: "success" | "error"; message: string } | null;
+type Feedback = {
+  kind: "success" | "error";
+  message: string;
+  action?: string;
+} | null;
+
+const accountValidationRequests =
+  createRequestCoalescer<ApiResult<{ account: LlmAccountPublic }>>();
 
 export function LlmPanel({
+  active,
   initialAccounts,
 }: {
+  active: boolean;
   initialAccounts: LlmAccountPublic[];
 }) {
   const [accounts, setAccounts] = useState(initialAccounts);
   const [creating, setCreating] = useState(false);
   const [action, setAction] = useState<AccountAction>(null);
   const [loading, setLoading] = useState(false);
+  const [validatingIds, setValidatingIds] = useState<Set<string>>(new Set());
   const [feedback, setFeedback] = useState<Feedback>(null);
+  const mountedRef = useRef(false);
+  const automaticValidationStartedRef = useRef(false);
+  const accountsRef = useRef(accounts);
+
+  useEffect(() => {
+    accountsRef.current = accounts;
+  }, [accounts]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+
+    if (!active) {
+      automaticValidationStartedRef.current = false;
+      return () => {
+        mountedRef.current = false;
+      };
+    }
+
+    if (!automaticValidationStartedRef.current) {
+      automaticValidationStartedRef.current = true;
+      const githubAccountIds = accountsRef.current
+        .filter((account) => account.provider === "github_copilot")
+        .map((account) => account.id);
+
+      void runBoundedAccountValidation({
+        accountIds: githubAccountIds,
+        validate: validateAccountRequest,
+        onStart: (accountId) => {
+          if (mountedRef.current) {
+            setValidatingIds((current) => withSetValue(current, accountId));
+          }
+        },
+        onResult: (accountId, result) => {
+          if (!mountedRef.current) {
+            return;
+          }
+
+          setValidatingIds((current) => withoutSetValue(current, accountId));
+
+          if (result.ok) {
+            setAccounts((current) =>
+              replaceAccount(current, result.data.account)
+            );
+          } else {
+            if (result.code === "validation_superseded") {
+              void loadAccounts();
+            }
+
+            setFeedback({
+              kind: "error",
+              message: result.error,
+              action: result.action,
+            });
+          }
+        },
+        onError: (accountId) => {
+          if (mountedRef.current) {
+            setValidatingIds((current) => withoutSetValue(current, accountId));
+          }
+        },
+      });
+
+      if (githubAccountIds.length > AUTO_VALIDATION_MAX_ACCOUNTS) {
+        setFeedback({
+          kind: "error",
+          message: `Foram validadas apenas as primeiras ${AUTO_VALIDATION_MAX_ACCOUNTS.toLocaleString("pt-PT")} contas GitHub Copilot.`,
+          action:
+            "Use “Validar novamente” nas restantes contas ou reduza o número de contas configuradas.",
+        });
+      }
+    }
+
+    return () => {
+      mountedRef.current = false;
+    };
+  }, [active]);
+
+  async function validateAccount(accountId: string) {
+    setValidatingIds((current) => withSetValue(current, accountId));
+    setFeedback(null);
+    const result = await validateAccountRequest(accountId);
+
+    if (!mountedRef.current) {
+      return;
+    }
+
+    setValidatingIds((current) => withoutSetValue(current, accountId));
+
+    if (!result.ok) {
+      if (result.code === "validation_superseded") {
+        await loadAccounts();
+      }
+
+      setFeedback({
+        kind: "error",
+        message: result.error,
+        action: result.action,
+      });
+      return;
+    }
+
+    setAccounts((current) => replaceAccount(current, result.data.account));
+    const guidance = getLlmValidationGuidance(
+      result.data.account.last_validation_error_code
+    );
+    setFeedback(
+      result.data.account.status === "active"
+        ? {
+            kind: "success",
+            message: "Conta validada e catálogo de modelos sincronizado.",
+          }
+        : {
+            kind: "error",
+            message:
+              guidance?.message ?? "A conta requer atenção antes de ser usada.",
+            action: guidance?.action,
+          }
+    );
+  }
 
   async function loadAccounts() {
     setLoading(true);
@@ -97,15 +238,26 @@ export function LlmPanel({
   }
 
   const pendingCount = accounts.filter(
-    (account) => account.status === "pending_validation"
+    (account) => account.status !== "active"
   ).length;
+  const activeCount = accounts.filter(
+    (account) => account.status === "active"
+  ).length;
+  const availableModelCount = accounts.reduce(
+    (total, account) =>
+      total +
+      (account.status === "active"
+        ? account.models.filter((model) => !model.is_stale).length
+        : 0),
+    0
+  );
 
   return (
     <div className="min-w-0">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <SectionTitle
           title="Contas de fornecedores LLM"
-          description="Guarde ligações individuais aos fornecedores que pretende usar. Nesta fase são apenas configuradas e ficam indisponíveis para execução."
+          description="Valide contas GitHub Copilot e sincronize os modelos acessíveis. A autorização manual dos modelos será o passo seguinte."
         />
         <button
           type="button"
@@ -121,22 +273,30 @@ export function LlmPanel({
         </button>
       </div>
 
-      <div className="mt-6 grid gap-3 sm:grid-cols-3">
+      <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <SummaryCard
           label="Contas configuradas"
           value={accounts.length.toLocaleString("pt-PT")}
         />
         <SummaryCard
-          label="Por validar"
+          label="Requerem atenção"
           value={pendingCount.toLocaleString("pt-PT")}
         />
-        <SummaryCard label="Disponíveis para execução" value="0" />
+        <SummaryCard
+          label="Contas ativas"
+          value={activeCount.toLocaleString("pt-PT")}
+        />
+        <SummaryCard
+          label="Modelos disponíveis"
+          value={availableModelCount.toLocaleString("pt-PT")}
+        />
       </div>
 
-      <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-950">
-        <strong>Nenhuma conta está ativa.</strong> Não são feitas chamadas aos
-        fornecedores nem validação de credenciais, descoberta de modelos ou
-        geração LLM nesta fase.
+      <div className="mt-4 rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm leading-6 text-blue-950">
+        As contas GitHub Copilot são revalidadas ao entrar nesta área. Uma conta
+        só fica ativa após autenticação real e descoberta de pelo menos um
+        modelo. Os modelos encontrados continuam desativados até existir
+        autorização manual numa entrega futura.
       </div>
 
       <FeedbackMessage feedback={feedback} />
@@ -145,15 +305,14 @@ export function LlmPanel({
         <div className="mt-6 rounded-xl border border-teal-200 bg-teal-50/40 p-4 sm:p-6">
           <CreateAccountForm
             onCancel={() => setCreating(false)}
-            onCreated={async () => {
+            onCreated={async (account) => {
               setCreating(false);
-              if (await loadAccounts()) {
-                setFeedback({
-                  kind: "success",
-                  message:
-                    "Conta guardada como “Por validar”. A credencial não voltará a ser mostrada.",
-                });
-              }
+              setAccounts((current) => [account, ...current]);
+              setFeedback({
+                kind: "success",
+                message:
+                  "Conta validada e guardada. A credencial não voltará a ser mostrada.",
+              });
             }}
           />
         </div>
@@ -186,9 +345,8 @@ export function LlmPanel({
               Ainda não existem contas
             </h4>
             <p className="mx-auto mt-2 max-w-lg text-sm leading-6 text-slate-600">
-              Adicione uma conta por fine-grained PAT ou API key. Pode
-              configurar várias contas do mesmo fornecedor, desde que tenham
-              nomes diferentes.
+              Adicione uma conta GitHub Copilot com um fine-grained PAT. Pode
+              configurar várias contas, desde que tenham nomes diferentes.
             </p>
           </div>
         ) : (
@@ -200,12 +358,15 @@ export function LlmPanel({
               return (
                 <li
                   key={account.id}
+                  aria-busy={validatingIds.has(account.id)}
                   className="min-w-0 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5"
                 >
                   <AccountCard
                     account={account}
                     action={currentAction}
-                    busy={loading}
+                    busy={loading || validatingIds.has(account.id)}
+                    validating={validatingIds.has(account.id)}
+                    onValidate={() => void validateAccount(account.id)}
                     onAction={(type) => {
                       setAction(
                         currentAction === type
@@ -270,15 +431,9 @@ export function LlmPanel({
         )}
       </section>
 
-      <div className="mt-8 grid gap-4 lg:grid-cols-2">
-        <FutureSection
-          title="Modelos e encaminhamento"
-          description="A descoberta automática de modelos, autorização manual, modelo geral, regras por funcionalidade e fallbacks ordenados ficarão disponíveis quando a validação dos fornecedores for integrada."
-        />
-        <FutureSection
-          title="Utilização"
-          description="Tokens de entrada e saída, latência, estado e custo estimado serão apresentados após existir execução LLM. Prompts e respostas não farão parte desta telemetria."
-        />
+      <div className="mt-8 grid gap-4">
+        <ModelCatalogSection accounts={accounts} />
+        <UsageAvailabilitySection />
       </div>
     </div>
   );
@@ -288,14 +443,34 @@ function AccountCard({
   account,
   action,
   busy,
+  validating,
+  onValidate,
   onAction,
 }: {
   account: LlmAccountPublic;
   action: AccountActionType | null;
   busy: boolean;
+  validating: boolean;
+  onValidate: () => void;
   onAction: (action: AccountActionType) => void;
 }) {
   const provider = PROVIDER_DETAILS[account.provider];
+  const validationGuidance = getLlmValidationGuidance(
+    account.last_validation_error_code
+  );
+  const currentModelCount = account.models.filter(
+    (model) => !model.is_stale
+  ).length;
+  const transientFailure =
+    account.status === "error" &&
+    isTransientLlmValidationError(account.last_validation_error_code);
+  const lastCatalogAt = account.models.reduce<string | null>(
+    (latest, model) =>
+      !latest || new Date(model.last_seen_at) > new Date(latest)
+        ? model.last_seen_at
+        : latest,
+    null
+  );
 
   return (
     <>
@@ -307,7 +482,7 @@ function AccountCard({
           {provider.shortLabel}
         </div>
         <div className="min-w-0 flex-1">
-          <StatusBadge status={account.status} />
+          <StatusBadge status={account.status} validating={validating} />
           <h4 className="mt-2 break-words text-lg font-bold text-slate-950">
             {account.display_name}
           </h4>
@@ -332,9 +507,53 @@ function AccountCard({
         <Metadata label="Credencial substituída" wide>
           {formatDate(account.credential_updated_at)}
         </Metadata>
+        <Metadata label="Último teste">
+          {formatOptionalDate(account.last_validation_at)}
+        </Metadata>
+        <Metadata label="Modelos encontrados">
+          {currentModelCount.toLocaleString("pt-PT")}
+          {transientFailure && currentModelCount > 0
+            ? " (catálogo preservado; conta indisponível)"
+            : account.models.some((model) => model.is_stale)
+              ? ` (${account.models.length.toLocaleString("pt-PT")} no último catálogo)`
+              : ""}
+        </Metadata>
+        {lastCatalogAt && (
+          <Metadata label="Último catálogo válido" wide>
+            {formatDate(lastCatalogAt)}
+          </Metadata>
+        )}
       </dl>
 
+      {validationGuidance && (
+        <div
+          role="status"
+          className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-950"
+        >
+          <p>{validationGuidance.message}</p>
+          <p className="mt-1 font-semibold">{validationGuidance.action}</p>
+        </div>
+      )}
+
+      {account.provider !== "github_copilot" && (
+        <p className="mt-4 rounded-lg bg-slate-100 p-3 text-sm text-slate-700">
+          A validação real deste fornecedor ainda não está disponível; esta
+          conta não é ativada automaticamente.
+        </p>
+      )}
+
       <div className="mt-4 flex flex-wrap gap-2 border-t border-slate-200 pt-4">
+        {account.provider === "github_copilot" && (
+          <button
+            type="button"
+            onClick={onValidate}
+            disabled={busy}
+            aria-live="polite"
+            className={PRIMARY_BUTTON_CLASS}
+          >
+            {validating ? "A validar…" : "Validar novamente"}
+          </button>
+        )}
         <ActionButton
           active={action === "edit"}
           disabled={busy}
@@ -373,7 +592,7 @@ function CreateAccountForm({
   onCreated,
 }: {
   onCancel: () => void;
-  onCreated: () => Promise<void>;
+  onCreated: (account: LlmAccountPublic) => Promise<void>;
 }) {
   const formId = useId();
   const [provider, setProvider] = useState<LlmProvider>("github_copilot");
@@ -410,12 +629,16 @@ function CreateAccountForm({
     setPending(false);
 
     if (!result.ok) {
-      setFeedback({ kind: "error", message: result.error });
+      setFeedback({
+        kind: "error",
+        message: result.error,
+        action: result.action,
+      });
       return;
     }
 
     setCredential("");
-    await onCreated();
+    await onCreated(result.data.account);
   }
 
   return (
@@ -440,8 +663,15 @@ function CreateAccountForm({
           className={INPUT_CLASS}
         >
           {LLM_PROVIDERS.map((value) => (
-            <option key={value} value={value}>
+            <option
+              key={value}
+              value={value}
+              disabled={value !== "github_copilot"}
+            >
               {PROVIDER_DETAILS[value].label}
+              {value !== "github_copilot"
+                ? " — validação ainda indisponível"
+                : ""}
             </option>
           ))}
         </select>
@@ -480,9 +710,10 @@ function CreateAccountForm({
           Use um fine-grained PAT <code>github_pat_</code>, criado na sua conta
           pessoal com a Account permission <strong>Copilot Requests</strong>.
           Não use a password, um token Vercel, um token GitHub Models nem um
-          token classic <code>ghp_</code>. A permissão não pode ser confirmada
-          localmente; a validação real será futura. OAuth será preferível numa
-          versão web multiutilizador.
+          token classic <code>ghp_</code>. Antes de guardar, o worker isolado
+          confirma a identidade, o entitlement/política aplicável e os modelos
+          realmente acessíveis. OAuth continuará preferível numa versão web
+          multiutilizador.
         </p>
       )}
       {provider === "openai_compatible" && (
@@ -501,8 +732,9 @@ function CreateAccountForm({
         </FormField>
       )}
       <p className="text-xs leading-5 text-slate-500">
-        Guardar não testa a credencial nem contacta o endpoint. A conta ficará
-        sempre no estado “Por validar”.
+        Para GitHub Copilot, a conta só será guardada depois de autenticação
+        real e descoberta de modelos. Outros fornecedores ainda não podem ser
+        validados nem adicionados nesta entrega.
       </p>
       <FeedbackMessage feedback={feedback} />
       <div className="flex flex-wrap justify-end gap-2">
@@ -519,7 +751,7 @@ function CreateAccountForm({
           disabled={pending}
           className={PRIMARY_BUTTON_CLASS}
         >
-          {pending ? "A guardar..." : "Guardar conta"}
+          {pending ? "A validar…" : "Validar e guardar"}
         </button>
       </div>
     </form>
@@ -795,22 +1027,173 @@ function SummaryCard({ label, value }: { label: string; value: string }) {
   );
 }
 
-function FutureSection({
-  title,
-  description,
-}: {
-  title: string;
-  description: string;
-}) {
+function ModelCatalogSection({ accounts }: { accounts: LlmAccountPublic[] }) {
+  const catalogAccounts = accounts.filter(
+    (account) => account.models.length > 0
+  );
+  const availableCount = catalogAccounts.reduce(
+    (total, account) =>
+      total +
+      (account.status === "active"
+        ? account.models.filter((model) => !model.is_stale).length
+        : 0),
+    0
+  );
+
+  return (
+    <section
+      className="rounded-xl border border-slate-200 bg-white p-4 sm:p-5"
+      aria-labelledby="llm-model-catalog-heading"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3
+            id="llm-model-catalog-heading"
+            className="font-bold text-slate-950"
+          >
+            Modelos disponíveis
+          </h3>
+          <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
+            Catálogo devolvido pelas contas validadas. Os modelos continuam
+            desativados até existir autorização manual.
+          </p>
+        </div>
+        <span
+          role="status"
+          aria-live="polite"
+          className="inline-flex min-h-8 items-center rounded-full bg-teal-100 px-3 text-xs font-bold text-teal-900"
+        >
+          {availableCount.toLocaleString("pt-PT")} disponíveis
+        </span>
+      </div>
+
+      {catalogAccounts.length === 0 ? (
+        <p className="mt-4 rounded-lg bg-slate-50 p-4 text-sm text-slate-600">
+          Valide uma conta GitHub Copilot para descobrir os modelos disponíveis.
+        </p>
+      ) : (
+        <div className="mt-5 space-y-5">
+          {catalogAccounts.map((account) => (
+            <section
+              key={account.id}
+              aria-labelledby={`llm-model-account-${account.id}`}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h4
+                  id={`llm-model-account-${account.id}`}
+                  className="text-sm font-bold text-slate-900"
+                >
+                  {account.display_name}
+                </h4>
+                <span className="text-xs font-semibold text-slate-500">
+                  {account.models.length.toLocaleString("pt-PT")} no catálogo
+                </span>
+              </div>
+              <ul className="mt-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                {account.models.map((model) => {
+                  const maxPromptTokens = modelCapabilityNumber(
+                    model.capabilities,
+                    "maxPromptTokens"
+                  );
+                  const maxContextTokens = modelCapabilityNumber(
+                    model.capabilities,
+                    "maxContextWindowTokens"
+                  );
+
+                  return (
+                    <li
+                      key={model.id}
+                      className="min-w-0 rounded-lg border border-slate-200 bg-slate-50 p-3"
+                    >
+                      <p className="break-words text-sm font-bold text-slate-950">
+                        {model.display_name}
+                      </p>
+                      <p className="mt-1 break-all font-mono text-xs text-slate-500">
+                        {model.provider_model_id}
+                      </p>
+                      {(maxPromptTokens || maxContextTokens) && (
+                        <p className="mt-2 text-xs leading-5 text-slate-600">
+                          {maxPromptTokens &&
+                            `Prompt: ${formatTokenLimit(maxPromptTokens)}`}
+                          {maxPromptTokens && maxContextTokens ? " · " : ""}
+                          {maxContextTokens &&
+                            `Contexto: ${formatTokenLimit(maxContextTokens)}`}
+                        </p>
+                      )}
+                      <p className="mt-2 text-xs font-semibold text-slate-600">
+                        {modelCatalogStatus(account, model)}
+                      </p>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function UsageAvailabilitySection() {
   return (
     <section className="rounded-xl border border-slate-200 bg-slate-50 p-5">
       <span className="inline-flex rounded-full bg-slate-200 px-2 py-1 text-xs font-bold text-slate-700">
-        Disponível após integração
+        Métrica não disponibilizada
       </span>
-      <h3 className="mt-3 font-bold text-slate-950">{title}</h3>
-      <p className="mt-2 text-sm leading-6 text-slate-600">{description}</p>
+      <h3 className="mt-3 font-bold text-slate-950">
+        Utilização de tokens no ciclo
+      </h3>
+      <dl className="mt-4 grid gap-3 sm:grid-cols-2">
+        <Metadata label="Tokens consumidos">Não disponível</Metadata>
+        <Metadata label="Tokens restantes">Não disponível</Metadata>
+      </dl>
+      <p className="mt-4 text-sm leading-6 text-slate-600">
+        O GitHub Copilot não disponibiliza um total de tokens por utilizador
+        para o ciclo atual. O SDK expõe métricas apenas da sessão executada
+        nesta aplicação e uma quota experimental em pedidos premium, que não
+        equivale a tokens. Para evitar números enganadores, não apresentamos
+        estimativas.
+      </p>
     </section>
   );
+}
+
+function modelCapabilityNumber(
+  capabilities: LlmAccountPublic["models"][number]["capabilities"],
+  key: "maxPromptTokens" | "maxContextWindowTokens"
+) {
+  if (
+    typeof capabilities !== "object" ||
+    capabilities === null ||
+    Array.isArray(capabilities)
+  ) {
+    return null;
+  }
+
+  const value = capabilities[key];
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : null;
+}
+
+function formatTokenLimit(value: number) {
+  return `${value.toLocaleString("pt-PT")} tokens`;
+}
+
+function modelCatalogStatus(
+  account: LlmAccountPublic,
+  model: LlmAccountPublic["models"][number]
+) {
+  if (model.is_stale) {
+    return "Catálogo anterior";
+  }
+
+  if (account.status !== "active") {
+    return "Preservado · conta indisponível";
+  }
+
+  return model.enabled ? "Autorizado" : "Disponível · autorização pendente";
 }
 
 function Metadata({
@@ -900,17 +1283,28 @@ function ActionButton({
   );
 }
 
-function StatusBadge({ status }: { status: LlmAccountStatus }) {
+function StatusBadge({
+  status,
+  validating,
+}: {
+  status: LlmAccountStatus;
+  validating: boolean;
+}) {
   const styles: Record<LlmAccountStatus, string> = {
     pending_validation: "bg-amber-100 text-amber-900",
+    active: "bg-emerald-100 text-emerald-900",
+    invalid: "bg-red-100 text-red-900",
+    error: "bg-red-100 text-red-900",
     inactive: "bg-slate-200 text-slate-700",
   };
 
   return (
     <span
+      role="status"
+      aria-live="polite"
       className={`inline-flex rounded-full px-2 py-0.5 text-xs font-bold ${styles[status]}`}
     >
-      {STATUS_LABELS[status]}
+      {validating ? "A validar…" : STATUS_LABELS[status]}
     </span>
   );
 }
@@ -921,7 +1315,7 @@ function FeedbackMessage({ feedback }: { feedback: Feedback }) {
   }
 
   return (
-    <p
+    <div
       role={feedback.kind === "error" ? "alert" : "status"}
       className={`mt-4 rounded-lg px-3 py-2 text-sm ${
         feedback.kind === "error"
@@ -929,8 +1323,11 @@ function FeedbackMessage({ feedback }: { feedback: Feedback }) {
           : "bg-emerald-50 text-emerald-800"
       }`}
     >
-      {feedback.message}
-    </p>
+      <p>{feedback.message}</p>
+      {feedback.action && (
+        <p className="mt-1 font-semibold">{feedback.action}</p>
+      )}
+    </div>
   );
 }
 
@@ -960,7 +1357,13 @@ function formatDate(value: string) {
   }).format(new Date(value));
 }
 
-type ApiResult<T> = { ok: true; data: T } | { ok: false; error: string };
+function formatOptionalDate(value: string | null) {
+  return value ? formatDate(value) : "Nunca";
+}
+
+type ApiResult<T> =
+  | { ok: true; data: T }
+  | { ok: false; error: string; code?: string; action?: string };
 
 async function requestJson<T>(
   url: string,
@@ -986,6 +1389,20 @@ async function requestJson<T>(
           typeof data.error === "string"
             ? data.error
             : "Não foi possível concluir a operação.",
+        code:
+          typeof data === "object" &&
+          data !== null &&
+          "code" in data &&
+          typeof data.code === "string"
+            ? data.code
+            : undefined,
+        action:
+          typeof data === "object" &&
+          data !== null &&
+          "action" in data &&
+          typeof data.action === "string"
+            ? data.action
+            : undefined,
       };
     }
 
@@ -996,6 +1413,36 @@ async function requestJson<T>(
       error: "Não foi possível contactar o servidor. Tente novamente.",
     };
   }
+}
+
+function validateAccountRequest(accountId: string, signal?: AbortSignal) {
+  return accountValidationRequests.run(accountId, () =>
+    requestJson<{ account: LlmAccountPublic }>(
+      `/api/admin/llm-accounts/${accountId}/validate`,
+      { method: "POST", signal }
+    )
+  );
+}
+
+function replaceAccount(
+  accounts: LlmAccountPublic[],
+  replacement: LlmAccountPublic
+) {
+  return accounts.map((account) =>
+    account.id === replacement.id ? replacement : account
+  );
+}
+
+function withSetValue(values: Set<string>, value: string) {
+  const next = new Set(values);
+  next.add(value);
+  return next;
+}
+
+function withoutSetValue(values: Set<string>, value: string) {
+  const next = new Set(values);
+  next.delete(value);
+  return next;
 }
 
 const INPUT_CLASS =

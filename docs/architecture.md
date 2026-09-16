@@ -1,7 +1,7 @@
 # Arquitetura — Projecto Carcanhol
 
-Versão: 3.1
-Estado: Fase 3A implementada
+Versão: 3.2
+Estado: Fase 3B implementada
 
 ## 1. Objetivo e âmbito atual
 
@@ -10,7 +10,7 @@ de investimentos. A arquitetura futura combinará dados financeiros reais,
 contexto macroeconómico e um agente LLM com tools. O LLM nunca será a fonte
 primária de preços/fundamentais nem executará transações.
 
-A Fase 3A implementa a fundação de produto e administração:
+A Fase 3B acrescenta validação real à fundação de produto e administração:
 
 - shell responsivo e navegação protegida;
 - autenticação e membership server-side;
@@ -18,12 +18,13 @@ A Fase 3A implementa a fundação de produto e administração:
 - versão atual das premissas globais;
 - gestão manual completa de Skills;
 - gestão de várias contas de fornecedores LLM por utilizador;
-- GitHub Copilot como provider canónico, sem execução do SDK;
+- GitHub Copilot como provider canónico, validado através do SDK num worker;
+- descoberta e sincronização do catálogo de modelos por conta;
 - envelopes AES-256-GCM de credenciais numa tabela service-only;
 - contrato server-only para carregar futuramente Skills ativas.
 
-Pesquisa, Chat, Análises, chamadas a fornecedores, validação/descoberta de
-modelos, geração LLM e dados financeiros não estão implementados.
+Pesquisa, Chat, Análises, geração LLM e dados financeiros não estão
+implementados. Os modelos descobertos não são autorizados automaticamente.
 
 ## 2. Arquitetura de execução
 
@@ -36,7 +37,15 @@ Next.js 16 App Router / Vercel
   ├─ layouts/pages: requireAuthorizedUser()
   ├─ Route Handlers BFF: Zod + same-origin + auth/membership
   ├─ repositórios server-only: anon + sessão, sujeitos a RLS
-  └─ criação/rotação de segredo: autorização explícita + service role + RPC
+  ├─ criação/rotação de segredo: autorização explícita + service role + RPC
+  └─ client HMAC para o worker (URL server-only allowlisted)
+         │ token plaintext apenas durante o pedido
+         ▼
+      Copilot validation worker / Node 24 container
+        ├─ endpoint estrito validate/listModels
+        ├─ @github/copilot-sdk 1.0.14 / CLI 1.0.85, mode: empty
+        ├─ sem prompts, sessões ou tools
+        └─ timeout, concorrência e replay bounded
   │
   ▼
 Supabase partilhado
@@ -80,6 +89,7 @@ cada handler de administração repete o guard junto do acesso aos dados.
 | `POST`   | `/api/admin/skills/:id/duplicate`        | —                        | Duplica como rascunho       |
 | `GET`    | `/api/admin/llm-accounts`                | —                        | Lista metadados próprios    |
 | `POST`   | `/api/admin/llm-accounts`                | fornecedor/nome/segredo  | Cria conta + segredo        |
+| `POST`   | `/api/admin/llm-accounts/:id/validate`   | —                        | Revalida e sincroniza       |
 | `PATCH`  | `/api/admin/llm-accounts/:id`            | nome/endpoint            | Edita metadados próprios    |
 | `PUT`    | `/api/admin/llm-accounts/:id/credential` | nova credencial          | Substitui envelope          |
 | `DELETE` | `/api/admin/llm-accounts/:id`            | confirmationName         | Elimina conta + segredo     |
@@ -90,10 +100,11 @@ Todos os inputs são validados com Zod. Handlers mutantes exigem um header
 usam `Cache-Control: no-store`.
 
 O `user_id` nunca é aceite do cliente: é sempre obtido da sessão validada.
-Operações normais usam anon + sessão. Apenas criação e rotação de segredos
-usam service role, instanciada internamente por código server-only depois de
-revalidar sessão, membership e ownership. As RPCs executam cada alteração numa
-única transação.
+Operações normais usam anon + sessão. Criação, rotação, leitura server-side do
+envelope e aplicação da validação usam service role apenas depois de
+revalidar sessão, membership e ownership. O BFF desencripta a credencial,
+envia apenas token + request-id ao worker e nunca lhe entrega a service role
+ou chave AES. As RPCs executam cada alteração numa única transação.
 
 ## 5. Schema efetivo
 
@@ -102,7 +113,9 @@ As migrations são aplicadas por ordem e são reexecutáveis:
 1. `0001_init_carcanhol_schema.sql`;
 2. `0002_admin_settings_and_skills.sql`;
 3. `0003_llm_accounts.sql`;
-4. `0004_github_copilot_provider.sql`.
+4. `0004_github_copilot_provider.sql`;
+5. `0005_github_copilot_validation.sql`;
+6. `0006_preserve_transient_validation_catalog.sql`.
 
 Nenhuma migration cria objetos de aplicação em `public`.
 
@@ -157,8 +170,9 @@ As funções de trigger pertencem a `carcanhol`, usam `security invoker` e
 ### Contas e credenciais LLM
 
 `carcanhol.llm_accounts` contém apenas metadados próprios: fornecedor, nome,
-tipo de autenticação, estado (`pending_validation` ou `inactive`), endpoint
-custom HTTPS, sufixo mascarável e metadados de validação futura. O índice
+tipo de autenticação, estado (`pending_validation`, `active`, `invalid`,
+`error` ou `inactive`), endpoint custom HTTPS, sufixo mascarável e resultado
+sanitizado da última validação. O índice
 `lower(btrim(display_name))` impede nomes duplicados por utilizador sem impedir
 várias contas do mesmo fornecedor. Authenticated recebe apenas leitura,
 eliminação e atualização das colunas `display_name`/`custom_endpoint`, sempre
@@ -184,7 +198,9 @@ A migration `0004` altera o provider canónico de `github_models` para
 `llm_account_secrets.aad_provider` o valor que participou no AAD de cada
 envelope existente; assim, uma credencial antiga continua autenticável sem
 decifração ou recifragem na migration. Uma rotação futura cifra com o provider
-canónico e atualiza esse campo na mesma RPC.
+canónico e atualiza esse campo na mesma RPC. `validation_generation` e
+`last_validation_request_id` impedem uma conclusão antiga de substituir um
+resultado mais recente; `validating` nunca é persistido.
 
 Para GitHub Copilot, a criação manual produz apenas
 `credential_type = fine_grained_pat`. O schema reserva
@@ -193,18 +209,25 @@ Os tipos genéricos `token` e `oauth` permanecem permitidos apenas para
 compatibilidade não destrutiva com outros providers; `api_key` não é
 compatível com GitHub Copilot.
 
-### Estruturas para integração futura
+### Catálogo e estruturas futuras
 
-- `llm_account_models`: catálogo automaticamente descoberto por conta; cada
-  modelo começa `enabled = false` e exigirá autorização manual;
+- `llm_account_models`: catálogo sincronizado por `provider_model_id`; cada
+  modelo novo começa `enabled = false`, metadata é allowlisted/bounded e
+  modelos ausentes ou invalidados por uma falha definitiva ficam
+  `is_stale = true` e desativados. Timeout/indisponibilidade/erro desconhecido
+  bloqueiam a conta com `status = error`, mas preservam catálogo e escolhas do
+  último sucesso;
 - `llm_routing_rules`: modelo geral ou por funcionalidade, onde ordem 0 é o
   principal e as restantes rows são fallbacks ordenados;
 - `llm_usage_events`: tokens de entrada/saída, latência, estado e custo
   estimado, sem colunas para prompts ou respostas.
 
-As três tabelas são metadata user-owned com RLS ownership + membership. Nesta
-fase authenticated tem apenas leitura; descoberta, autorização, routing e
-telemetria ainda não têm handlers.
+As três tabelas são metadata user-owned com RLS ownership + membership.
+Authenticated tem apenas leitura. Descoberta é aplicada pelas RPCs
+service-only; autorização, routing e telemetria ainda não têm handlers.
+Qualquer runtime futuro terá de exigir simultaneamente conta `active`, modelo
+`enabled` e `is_stale = false`; uma conta `error` nunca é elegível mesmo quando
+o catálogo/seleção anterior foi preservado.
 
 ## 6. Lifecycle de Skills
 
@@ -229,57 +252,161 @@ exige ainda que o utilizador escreva exatamente o nome antes da eliminação.
 Duplicar cria sempre uma nova Skill `draft`. Restaurar uma arquivada resulta
 em `inactive`; a ativação posterior é explícita.
 
-## 7. Contrato futuro com o LLM
+## 7. Contrato com o worker Copilot
 
 ### GitHub Copilot
 
-O GitHub Models foi retirado em 30 de julho de 2026. O provider ativo passa a
-ser GitHub Copilot, que exige uma subscrição Copilot salvo quando é usado BYOK.
-Esta fase prepara configuração e persistência, mas não instala
-`@github/copilot-sdk`, não inicia o runtime, não valida tokens e não chama
-modelos.
+O GitHub Models foi retirado em 30 de julho de 2026. A integração usa
+`@github/copilot-sdk@1.0.14` (Copilot CLI 1.0.85), cujo runtime requer Node
+`^20.19.0 || >=22.12.0`; o container fixa Node 24. A validação cria uma sessão
+efémera request-bound com `SessionConfig.gitHubToken`, omite o modelo e chama a
+RPC pública tipada `session.rpc.model.list({})`, sem enviar prompt.
 
 O onboarding manual aceita exclusivamente um fine-grained PAT `github_pat_`
 da conta pessoal, com a conta pessoal como Resource owner e a Account
 permission `Copilot Requests`. Deve ter um prazo curto e ser guardado quando é
-criado, pois só é mostrado uma vez. A validação local confirma apenas prefixo,
-caracteres e tamanho: não consegue provar a subscrição nem inspecionar a
-permissão. PATs classic `ghp_` são incompatíveis; tokens OAuth `gho_` e GitHub
-App user `ghu_` são suportados pelo SDK, mas ficam reservados para uma futura
-integração OAuth/GitHub App user-to-server e não entram pelo formulário de
-PAT.
+criado, pois só é mostrado uma vez. PATs classic `ghp_` são incompatíveis;
+tokens OAuth `gho_` e GitHub App user `ghu_` são suportados pelo SDK, mas ficam
+reservados para uma futura integração user-to-server e não entram pelo
+formulário de PAT.
 
-O SDK Node inicia um runtime nativo/CLI como child process e usa estado em
-disco. Por isso, não será adicionado às Vercel Functions do Next.js, cujo ciclo
-de vida efémero, filesystem temporário e limites de execução não são adequados
-a esse processo. Esta conclusão sobre Vercel é uma decisão arquitetural
-derivada dos requisitos do SDK; a documentação do GitHub não menciona Vercel
-especificamente. A topologia futura será:
+O SDK Node inicia o runtime incluído como child process. Ele não é dependência
+da app Next.js nem é importado por qualquer Route Handler. Para cada pedido, o
+worker cria um diretório temporário `0700`, inicia um cliente com
+`mode: "empty"`, `useLoggedInUser: false`, `logLevel: "none"` e ambiente
+allowlisted, cria uma sessão sem model/tools/MCP/agents/skills/store/telemetry,
+chama `session.rpc.model.list({})`, faz `disconnect()` + `deleteSession()`,
+depois `stop()`/`forceStop()` e remove o diretório. O token é passado apenas
+em memória na criação da sessão, nunca por URL ou ficheiro. Não existe prompt,
+e qualquer permission request
+futura terá `availableTools: []` e `denyAllPermissions`.
+
+O child nativo recebe apenas `HOME`/`TMP*` apontados ao diretório efémero,
+`PATH` quando definido e `SystemRoot` exclusivamente em Windows. Proxy e CA
+provenientes do ambiente do container (`HTTP(S)_PROXY`, `NO_PROXY`,
+`NODE_EXTRA_CA_CERTS`, `SSL_CERT_*`) não são herdados, evitando que o
+transporte Rust/reqwest tente interpretar configuração destinada ao processo
+Node. A imagem runtime instala explicitamente `ca-certificates`, e o CI exige
+que `/etc/ssl/certs/ca-certificates.crt` exista e não esteja vazio antes de
+aceitar o container.
 
 ```text
 Browser
   │ sessão Carcanhol
   ▼
-Next.js BFF / Vercel
-  │ pedido autenticado e autorizado
+Next.js BFF
+  ├─ ownership + membership
+  ├─ desencripta envelope com aad_provider
+  └─ HMAC(method, path, timestamp, request-id, sha256(body))
+  │ HTTPS ou service binding privado
   ▼
-Worker/container Copilot headless, separado e duradouro
-  ├─ uma sessão isolada por utilizador/pedido
-  ├─ token entregue apenas à sessão respetiva
-  ├─ mode: "empty"
-  ├─ tools explicitamente autorizadas
-  └─ estado/runtime fora da Function
+Worker/container Copilot
+  ├─ body/schema estritos: request-id + token
+  ├─ comparação HMAC constant-time + janela + replay store
+  ├─ concorrência/fila/payload/timeout bounded
+  ├─ start → createSession({ gitHubToken }) → session.model.list
+  ├─ disconnect → deleteSession → stop
+  └─ resposta allowlisted: model id/name/capabilities/policy/billing
 ```
 
-O BFF nunca enviará a service role, a chave AES ou envelopes para o browser.
-O worker terá identidade e canal próprios, limites de concorrência e
-timeouts. Esta fase não cria o worker, imagem Docker, endpoint interno ou
-qualquer chamada ao SDK.
+Falhas são reduzidas a `invalid_token`, `no_subscription`,
+`org_policy_blocked`, `timeout`, `unavailable`, `no_models` ou `unknown`.
+Estados específicos só são inferidos de evidência estruturada; um `403`
+genérico fica `unknown`. Mensagens remotas em bruto nunca são
+persistidas/devolvidas.
+
+Uma exceção de diagnóstico estritamente limitada cobre apenas o erro conhecido
+do SDK `-32603` com a mensagem exata de autenticação de sessão terminada em
+`network fetch failed: request failed: builder error`. Dentro do mesmo
+deadline, o worker consulta a URL fixa `https://api.github.com/user`, com
+Bearer em memória, `Accept` e `User-Agent` fixos e redirects rejeitados. Apenas
+o status é observado; body e headers nunca são lidos ou transportados. `200`
+confirma somente a credencial GitHub e mantém o resultado Copilot como
+`unknown`, com `GITHUB_CREDENTIAL_PROBE_SUCCEEDED`; `401` é `invalid_token`;
+`403` permanece `unknown` com `GITHUB_CREDENTIAL_PROBE_FORBIDDEN`, sem inferir
+subscrição; outros status inconclusivos usam
+`GITHUB_CREDENTIAL_PROBE_UNEXPECTED_STATUS`. Estes códigos e mensagens são
+fixos e não incluem o status. Timeout/rede/`5xx` são transitórios. Outros erros
+nunca acionam o probe. Não se alterou a herança de proxy/CA do child runtime
+sem evidência adicional.
+
+Os outcomes `200`, `403` e status inconclusivo usam um contrato literal
+separado (`copilot_validation_probe_unknown`, `requestId`, `code`, `message`).
+Não reutilizam `error.stringCodes`, cuja regra anti-segredo continua aplicada
+apenas a evidência remota não confiável.
+
+Para `unknown`, o worker cria um diagnóstico efémero com shape fechado
+(`event`, `requestId`, `error.constructor/name/stringCodes/numericCodes/statuses/message`).
+Antes do fallback textual, privilegia `ResponseError.data.code` e statuses
+estruturados. A mensagem é redigida e limitada; stack, erro raw, token, body e
+environment nunca são lidos. O BFF devolve esse objeto apenas no POST de
+revalidação autenticado do proprietário. Não entra nas RPCs/BD, na listagem de
+contas ou na renderização normal da UI.
+
+Um `unavailable` só pode incluir diagnóstico quando foi produzido por esse
+probe exato. O contrato aceita exclusivamente as categorias fixas
+`GITHUB_CREDENTIAL_PROBE_NETWORK_ERROR`,
+`GITHUB_CREDENTIAL_PROBE_RATE_LIMITED` e
+`GITHUB_CREDENTIAL_PROBE_GITHUB_UNAVAILABLE`, com mensagens literais. A
+categoria de rede pode ainda incluir apenas um cause code da allowlist
+`ENOTFOUND`, `EAI_AGAIN`, `ECONNRESET`, `ETIMEDOUT`, `CERT_HAS_EXPIRED`,
+`SELF_SIGNED_CERT_IN_CHAIN` ou `UNABLE_TO_VERIFY_LEAF_SIGNATURE`. Status,
+headers, body e texto remoto não atravessam o contrato. Um `unavailable`
+genérico continua sem diagnóstico.
+
+O cliente HMAC no BFF diagnostica separadamente a fronteira BFF→worker. Sem
+ler ou transportar body, headers, URL, status numérico ou exceção raw,
+classifica rejeição HMAC (`WORKER_AUTH_REJECTED`), rate limit, indisponibilidade
+HTTP, outro HTTP não-2xx, erro de rede, resposta inválida e timeout. Apenas
+`WORKER_NETWORK_ERROR` pode incluir um cause code da mesma allowlist curta.
+Estes diagnósticos só acompanham a resposta autenticada de revalidação, nunca
+são persistidos/listados/renderizados, e não alteram `unavailable`/`timeout`
+para um erro definitivo.
+
+O servidor mantém ainda uma fase interna fechada:
+`receiving_body`, `authenticating`, `parsing_request`, `validating`,
+`validating_response` ou `writing_response`. Exceções só são correlacionadas
+depois de autenticação HMAC e parsing válido; nesse ponto a resposta é HTTP 200
+com `code = unavailable` e o diagnóstico literal
+`copilot_worker_internal_error` / `WORKER_INTERNAL_FAILURE` /
+`copilot worker failed internally`, além da fase. Antes da autenticação
+continua a responder apenas com erros HTTP genéricos. Se a própria escrita
+falhar, a ligação é encerrada e só o diagnóstico fixo é registado.
+
+O worker expõe apenas `GET /health` e `POST /v1/copilot/validate`, rejeita
+`Origin` e não envia headers CORS. `/health` é readiness: faz `PING` e um
+`SET NX PX` efémero e bounded, devolvendo `503` sem detalhes quando Redis não
+está operacional ou não permite a escrita exigida. O cliente Redis partilha
+tentativas concorrentes, usa reconexão exponencial limitada
+(cinco tentativas, teto de dois segundos e jitter) e continua fail-closed.
+Local/teste podem usar replay store em memória; produção exige Redis
+partilhado e reclama cada request-id atomicamente com `SET NX PX` até terminar
+a validade da assinatura.
 
 OAuth ou GitHub App user-to-server é o desenho recomendado para a futura
 versão web multiutilizador, evitando a recolha manual permanente de PATs. Um
 refresh token futuro, caso exista, continuará cifrado na tabela service-only;
 não será guardado em metadados públicos.
+
+#### Modelos, limites e utilização
+
+O catálogo visível na Administração vem de `session.rpc.model.list({})` e
+mostra os modelos atuais por conta, incluindo os limites de prompt/contexto
+quando o SDK os fornece. Estes valores são capacidade por pedido/modelo, não
+saldo mensal.
+
+O SDK 1.0.14 disponibiliza `account.getQuota` como API experimental, com
+pedidos usados/incluídos, percentagem restante e reset opcional. Essa quota é
+medida em pedidos premium, não em tokens. `session.usage.getMetrics` e
+`assistant.usage` medem apenas chamadas feitas na sessão desta aplicação; não
+representam o consumo total da conta no ciclo. As APIs REST de billing pessoal
+também reportam pedidos/AI credits, exigem a permissão adicional `Plan: read`
+e não cobrem planos pagos por organização.
+
+Por isso, a UI não inventa nem estima “tokens consumidos/restantes”: apresenta
+explicitamente a métrica como indisponível. Uma futura funcionalidade poderá
+mostrar pedidos premium sob esse nome, opt-in e com o contrato experimental
+versionado, sem os rotular como tokens.
 
 Fontes oficiais:
 [autenticação](https://docs.github.com/en/copilot/how-tos/copilot-sdk/auth/authenticate),
@@ -287,7 +414,12 @@ Fontes oficiais:
 [multi-tenancy](https://docs.github.com/en/copilot/how-tos/copilot-sdk/setup/multi-tenancy),
 [runtime incluído](https://github.com/github/copilot-sdk/blob/main/docs/setup/bundled-cli.md)
 e
-[persistência de sessões](https://github.com/github/copilot-sdk/blob/main/docs/features/session-persistence.md).
+[persistência de sessões](https://github.com/github/copilot-sdk/blob/main/docs/features/session-persistence.md),
+[usage and billing do SDK](https://github.com/github/copilot-sdk/blob/v1.0.14/docs/features/usage-and-billing.md),
+[REST billing usage](https://docs.github.com/en/rest/billing/usage),
+[Vercel Services](https://vercel.com/kb/guide/vercel-services),
+[service bindings](https://vercel.com/docs/services/bindings) e
+[container images](https://vercel.com/docs/functions/container-images).
 
 ### Skills e premissas
 
@@ -301,7 +433,7 @@ Estes métodos são server-only, criam sempre um cliente anon + sessão, repetem
 sessão e aplicam simultaneamente `user_id` e `status = active`. A RLS volta a
 exigir ownership + membership, pelo que falham fechados e não aceitam a injeção
 de um cliente service role. Serão a base das futuras tools `list_skills` e
-`load_skill`; a Fase 3A não as expõe nem integra um LLM.
+`load_skill`; a Fase 3B ainda não as expõe nem executa geração LLM.
 
 As premissas globais serão futuramente injetadas como contexto superior à
 mensagem do utilizador. Nesta fase são apenas persistidas, nunca enviadas a um
@@ -319,21 +451,22 @@ têm área mínima de 44 px, focus visível e transições curtas com
 não existe parser HTML nem `dangerouslySetInnerHTML`.
 
 A tab LLM começa por um resumo e apresenta cartões responsivos com fornecedor,
-estado, autenticação, máscara, endpoint e timestamps. Criar, editar, substituir
-credencial e eliminar têm labels explícitas e confirmação reforçada. Não
-existe ação de ativação: todas as contas permanecem “Por validar”. As secções
-de modelos/routing e utilização são informativas e não inventam modelos.
+estado, autenticação, máscara, endpoint, último teste e número de modelos.
+Entrar na tab inicia uma revalidação bounded de cada conta GitHub Copilot,
+mostrando primeiro o último estado conhecido e depois “A validar…”. Cada card
+tem ainda `Validar novamente`; `aria-live`, `aria-busy` e disabled impedem
+duplo clique e anunciam o progresso. O catálogo pode ser consultado, mas não
+ativado nesta entrega.
 
 Listas de Skills têm paginação server-side de 20 rows. Textareas têm limites
 equivalentes aos constraints Postgres e à validação Zod.
 
 ## 9. Evolução planeada
 
-1. Implementar o worker/container headless do Copilot SDK e o canal privado
-   com o BFF;
-2. implementar OAuth/GitHub App user-to-server e validação real de
-   credenciais;
-3. implementar descoberta automática de modelos;
+1. Ativar a infraestrutura do worker (Vercel Services exige configuração
+   externa) ou publicar o container num runtime isolado equivalente;
+2. operar e monitorizar o Redis de replay partilhado;
+3. implementar OAuth/GitHub App user-to-server;
 4. aplicar proteção SSRF/DNS, redirects, timeouts e limites antes de chamar
    endpoints custom;
 5. autorizar modelos e configurar routing/fallbacks;
@@ -346,3 +479,29 @@ equivalentes aos constraints Postgres e à validação Zod.
 Dados financeiros atuais terão sempre origem em tools/providers reais. O
 agente poderá propor candidatos, mas terá de os verificar antes de os
 apresentar.
+
+## 10. Deploy e bloqueio de infraestrutura
+
+Vercel Services e container images estão em beta. A topologia privada pode ser
+declarada com `deploy/vercel.services.example.json`, deixando apenas `web` no
+rewrite público e injetando `COPILOT_WORKER_URL` através de um service binding.
+O binding concede reachability, não autenticação; o HMAC continua obrigatório.
+
+O template não está ativo como `vercel.json` porque o deploy seguro exige
+ações fora do repositório:
+
+1. mudar o Framework Preset do projeto Vercel para **Services**;
+2. garantir isolamento de environment variables, de modo que
+   `copilot_worker` não receba `SUPABASE_SERVICE_ROLE_KEY` nem
+   `LLM_CREDENTIAL_ENCRYPTION_KEY`;
+3. provisionar o segredo HMAC independente nos dois serviços;
+4. provisionar Redis dedicado para nonces, sem dados de utilizador;
+5. configurar `GET /health` como readiness para remover instâncias sem Redis
+   do tráfego; o `Dockerfile.vercel` inclui também um `HEALTHCHECK`;
+6. aceitar explicitamente o risco operacional de uma funcionalidade beta.
+
+Se não houver isolamento de secrets por serviço, o worker deve ser publicado
+num projeto/container separado, com apenas as variáveis do respetivo
+`.env.example`; o BFF usa a origem HTTPS exata como allowlist. Não são
+necessárias alterações ao deploy Next.js atual para construir ou testar o
+worker.

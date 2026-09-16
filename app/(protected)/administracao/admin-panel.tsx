@@ -102,7 +102,10 @@ export function AdminPanel({
           aria-labelledby="admin-tab-llm"
           hidden={activeTab !== "llm"}
         >
-          <LlmPanel initialAccounts={initialLlmAccounts} />
+          <LlmPanel
+            active={activeTab === "llm"}
+            initialAccounts={initialLlmAccounts}
+          />
         </div>
         <div
           id="admin-panel-skills"
