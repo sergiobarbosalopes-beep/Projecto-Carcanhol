@@ -4,10 +4,12 @@ import {
   listLlmAccounts,
   LlmAccountConflictError,
   LlmCredentialValidationError,
+  LlmProviderValidationError,
 } from "@/src/admin/llm-accounts";
 import { createLlmAccountSchema } from "@/src/admin/llm-validation";
 import { createClient } from "@/src/database/server";
 import { jsonError, jsonSuccess, rejectCrossOrigin } from "@/src/http/api";
+import { consumeUserAndIpRateLimit } from "@/src/http/rate-limit";
 
 export async function GET() {
   try {
@@ -62,6 +64,23 @@ export async function POST(request: Request) {
       supabase,
       onUnauthorized: "throw",
     });
+    const rateLimit = consumeUserAndIpRateLimit({
+      request,
+      scope: "llm-account-create",
+      userId: user.id,
+      userLimit: 5,
+      ipLimit: 20,
+      windowMs: 10 * 60_000,
+    });
+
+    if (!rateLimit.allowed) {
+      return jsonError(
+        "Foram feitas demasiadas tentativas. Aguarde antes de voltar a validar.",
+        429,
+        { retryAfterSeconds: rateLimit.retryAfterSeconds }
+      );
+    }
+
     const account = await createLlmAccount(user.id, input.data);
 
     return jsonSuccess({ account }, 201);
@@ -78,6 +97,15 @@ export async function POST(request: Request) {
       return jsonError(error.message, 400);
     }
 
+    if (error instanceof LlmProviderValidationError) {
+      return jsonError(error.message, 422, {
+        code: error.code,
+        action: error.action,
+      });
+    }
+
     return jsonError("Não foi possível criar a conta LLM.", 500);
+  } finally {
+    input.data.credential = "";
   }
 }

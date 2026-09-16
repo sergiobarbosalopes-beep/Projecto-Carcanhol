@@ -16,7 +16,13 @@ export const LLM_CREDENTIAL_TYPES = [
   "token",
   "oauth",
 ] as const;
-export const LLM_ACCOUNT_STATUSES = ["pending_validation", "inactive"] as const;
+export const LLM_ACCOUNT_STATUSES = [
+  "pending_validation",
+  "active",
+  "invalid",
+  "error",
+  "inactive",
+] as const;
 
 export const LLM_ACCOUNT_NAME_MAX_LENGTH = 120;
 export const LLM_CREDENTIAL_MAX_LENGTH = 4096;
