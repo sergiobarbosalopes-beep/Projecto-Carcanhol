@@ -5,7 +5,7 @@ import {
   sanitizeCopilotModels,
   validateCopilotCredential,
 } from "../dist/runtime.js";
-import { sanitizePremiumRequestsQuota } from "../dist/copilot-adapter.js";
+import { sanitizePremiumInteractionsQuota } from "../dist/copilot-adapter.js";
 
 const requestId = "d510ccb5-22af-47b5-9280-3b605aac4c68";
 const token = `github_pat_${"S".repeat(40)}`;
@@ -18,40 +18,71 @@ const sessionBuilderError = {
   data: { code: "UNCLASSIFIED_PROVIDER_CODE" },
 };
 
-test("normalizes finite premium-request quota without negative values", () => {
+test("preserves provider units without inventing a milli-request scale", () => {
   assert.deepEqual(
-    sanitizePremiumRequestsQuota({
+    sanitizePremiumInteractionsQuota({
       quotaSnapshots: {
         premium_interactions: {
           isUnlimitedEntitlement: false,
-          entitlementRequests: 300,
-          usedRequests: 75,
+          entitlementRequests: 500_000,
+          usedRequests: 64_500,
           usageAllowedWithExhaustedQuota: true,
-          remainingPercentage: 75,
-          overage: 2,
+          remainingPercentage: 87.1,
+          overage: 0,
           overageAllowedWithExhaustedQuota: true,
-          resetDate: "2026-10-01T00:00:00Z",
+          resetDate: "2026-09-16T09:30:23.470Z",
         },
       },
     }),
     {
       status: "available",
-      metric: "premium_requests",
+      metric: "premium_interactions",
       isUnlimited: false,
-      usedRequests: 75,
-      includedRequests: 300,
-      remainingRequests: 225,
-      remainingPercentage: 75,
-      overageRequests: 2,
+      usedUnits: 64_500,
+      includedUnits: 500_000,
+      remainingUnits: 435_500,
+      remainingPercentage: 87.1,
+      overageUnits: 0,
       usageAllowedAfterLimit: true,
       overageAllowed: true,
-      resetAt: "2026-10-01T00:00:00Z",
+    }
+  );
+});
+
+test("preserves fractional provider units and a future reset date", () => {
+  assert.deepEqual(
+    sanitizePremiumInteractionsQuota({
+      quotaSnapshots: {
+        premium_interactions: {
+          isUnlimitedEntitlement: false,
+          entitlementRequests: 500,
+          usedRequests: 64.5,
+          usageAllowedWithExhaustedQuota: false,
+          remainingPercentage: 87.1,
+          overage: 0.25,
+          overageAllowedWithExhaustedQuota: true,
+          resetDate: "2099-10-01T00:00:00Z",
+        },
+      },
+    }),
+    {
+      status: "available",
+      metric: "premium_interactions",
+      isUnlimited: false,
+      usedUnits: 64.5,
+      includedUnits: 500,
+      remainingUnits: 435.5,
+      remainingPercentage: 87.1,
+      overageUnits: 0.25,
+      usageAllowedAfterLimit: false,
+      overageAllowed: true,
+      resetAt: "2099-10-01T00:00:00Z",
     }
   );
 });
 
 test("represents unlimited, absent, and malformed quota honestly", () => {
-  const unlimited = sanitizePremiumRequestsQuota({
+  const unlimited = sanitizePremiumInteractionsQuota({
     quotaSnapshots: {
       premium_interactions: {
         isUnlimitedEntitlement: true,
@@ -67,20 +98,20 @@ test("represents unlimited, absent, and malformed quota honestly", () => {
 
   assert.deepEqual(unlimited, {
     status: "available",
-    metric: "premium_requests",
+    metric: "premium_interactions",
     isUnlimited: true,
-    usedRequests: 18,
-    overageRequests: 0,
+    usedUnits: 18,
+    overageUnits: 0,
     usageAllowedAfterLimit: true,
     overageAllowed: false,
   });
-  assert.deepEqual(sanitizePremiumRequestsQuota({ quotaSnapshots: {} }), {
+  assert.deepEqual(sanitizePremiumInteractionsQuota({ quotaSnapshots: {} }), {
     status: "unavailable",
-    metric: "premium_requests",
+    metric: "premium_interactions",
     errorCode: "provider_quota_not_available",
   });
   assert.deepEqual(
-    sanitizePremiumRequestsQuota({
+    sanitizePremiumInteractionsQuota({
       quotaSnapshots: {
         premium_interactions: {
           isUnlimitedEntitlement: false,
@@ -95,7 +126,27 @@ test("represents unlimited, absent, and malformed quota honestly", () => {
     }),
     {
       status: "unavailable",
-      metric: "premium_requests",
+      metric: "premium_interactions",
+      errorCode: "malformed_provider_quota",
+    }
+  );
+  assert.deepEqual(
+    sanitizePremiumInteractionsQuota({
+      quotaSnapshots: {
+        premium_interactions: {
+          isUnlimitedEntitlement: false,
+          entitlementRequests: 500,
+          usedRequests: 1,
+          usageAllowedWithExhaustedQuota: false,
+          remainingPercentage: 99.8,
+          overage: null,
+          overageAllowedWithExhaustedQuota: false,
+        },
+      },
+    }),
+    {
+      status: "unavailable",
+      metric: "premium_interactions",
       errorCode: "malformed_provider_quota",
     }
   );
@@ -110,7 +161,7 @@ test("quota failure does not fail a valid model catalog", async () => {
       async listModels() {
         return [{ id: "gpt-5", name: "GPT-5" }];
       },
-      async getPremiumRequestsQuota() {
+      async getPremiumInteractionsQuota() {
         throw new Error(token);
       },
       async close() {},
@@ -122,7 +173,7 @@ test("quota failure does not fail a valid model catalog", async () => {
   if (result.ok) {
     assert.deepEqual(result.quota, {
       status: "unavailable",
-      metric: "premium_requests",
+      metric: "premium_interactions",
       errorCode: "provider_quota_unavailable",
     });
   }
@@ -139,7 +190,7 @@ test("a hanging quota call is bounded without invalidating models", async () => 
       async listModels() {
         return [{ id: "gpt-5", name: "GPT-5" }];
       },
-      async getPremiumRequestsQuota() {
+      async getPremiumInteractionsQuota() {
         return new Promise(() => undefined);
       },
       async close() {},

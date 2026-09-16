@@ -297,7 +297,7 @@ export function LlmPanel({
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <SectionTitle
           title="Contas de fornecedores LLM"
-          description="Valide contas, consulte modelos e pedidos premium e escolha a combinação conta+modelo usada por predefinição."
+          description="Valide contas, consulte modelos e utilização account-wide e escolha a combinação conta+modelo usada por predefinição."
         />
         <button
           type="button"
@@ -1222,17 +1222,18 @@ function UsageAvailabilitySection({
   return (
     <section
       className="rounded-xl border border-slate-200 bg-white p-4 sm:p-5"
-      aria-labelledby="llm-premium-requests-heading"
+      aria-labelledby="llm-provider-usage-heading"
     >
-      <h3
-        id="llm-premium-requests-heading"
-        className="font-bold text-slate-950"
-      >
-        Pedidos premium
+      <h3 id="llm-provider-usage-heading" className="font-bold text-slate-950">
+        Utilização do GitHub Copilot
       </h3>
       <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
-        Métrica account-wide reportada pelo fornecedor. Não representa tokens de
-        prompt/contexto nem utilização de sessões desta aplicação.
+        Métrica experimental account-wide{" "}
+        <code className="font-mono text-xs">premium_interactions</code>.
+        Conforme o plano, o GitHub pode apresentá-la como créditos de IA ou
+        pedidos premium; a API tipada atual não identifica a unidade. Os valores
+        são unidades do fornecedor, não tokens de prompt/contexto nem utilização
+        de sessões desta aplicação.
       </p>
 
       {accounts.length === 0 ? (
@@ -1289,8 +1290,9 @@ function QuotaDetails({ account }: { account: LlmAccountPublic }) {
   if (account.provider !== "github_copilot") {
     return (
       <p className="mt-4 text-sm leading-6 text-slate-600">
-        Este fornecedor não declara a capacidade “pedidos premium”; não é feita
-        qualquer equivalência artificial.
+        Este fornecedor não declara a capacidade{" "}
+        <code className="font-mono text-xs">premium_interactions</code>; não é
+        feita qualquer equivalência artificial.
       </p>
     );
   }
@@ -1314,18 +1316,18 @@ function QuotaDetails({ account }: { account: LlmAccountPublic }) {
         </p>
       )}
       <dl className="mt-4 grid gap-3 text-xs sm:grid-cols-2">
-        <Metadata label="Usados">
-          {formatOptionalCount(quota.used_requests)}
+        <Metadata label="Unidades utilizadas">
+          {formatOptionalCount(quota.used_units)}
         </Metadata>
-        <Metadata label="Incluídos">
+        <Metadata label="Unidades incluídas">
           {quota.is_unlimited
             ? "Ilimitados"
-            : formatOptionalCount(quota.included_requests)}
+            : formatOptionalCount(quota.included_units)}
         </Metadata>
-        <Metadata label="Restantes">
+        <Metadata label="Unidades restantes">
           {quota.is_unlimited
             ? "Ilimitados"
-            : formatOptionalCount(quota.remaining_requests)}
+            : formatOptionalCount(quota.remaining_units)}
         </Metadata>
         <Metadata label="Percentagem restante">
           {quota.is_unlimited || quota.remaining_percentage === null
@@ -1334,10 +1336,10 @@ function QuotaDetails({ account }: { account: LlmAccountPublic }) {
                 maximumFractionDigits: 2,
               })}%`}
         </Metadata>
-        <Metadata label="Uso adicional">
-          {formatOptionalCount(quota.overage_requests)}
+        <Metadata label="Unidades adicionais">
+          {formatOptionalCount(quota.overage_units)}
         </Metadata>
-        <Metadata label="Renovação">
+        <Metadata label="Próxima reposição">
           {formatOptionalDate(quota.reset_at)}
         </Metadata>
         <Metadata label="Última observação" wide>
@@ -1349,7 +1351,9 @@ function QuotaDetails({ account }: { account: LlmAccountPublic }) {
 }
 
 function formatOptionalCount(value: number | null) {
-  return value === null ? "Não disponível" : value.toLocaleString("pt-PT");
+  return value === null
+    ? "Não disponível"
+    : value.toLocaleString("pt-PT", { maximumFractionDigits: 6 });
 }
 
 function modelCapabilityNumber(

@@ -34,12 +34,18 @@ são devolvidas nem registadas.
 
 `account.getQuota` é uma API oficial mas experimental do SDK pinned. O worker
 consome apenas `quotaSnapshots.premium_interactions`, valida todos os campos e
-devolve uma allowlist local denominada `premium_requests`. Entitlements
-ilimitados não incluem total/restante/percentagem finitos; quotas ausentes,
-malformadas ou indisponíveis devolvem apenas um código categórico fixo. Esta
-falha nunca transforma um catálogo válido numa falha de credencial. O BFF pode
-preservar o último snapshot como stale, sem persistir raw errors, bodies,
-headers ou token.
+devolve uma allowlist local denominada `premium_interactions`. Os valores são
+preservados como unidades decimais do fornecedor: não existe divisão por 1 000.
+Isto é deliberadamente neutro porque o tipo público pinned não expõe
+`tokenBasedBilling`, usado pelo GitHub para distinguir “AI credits” de “Premium
+requests”. `remainingPercentage` é percentagem restante. Um `resetDate` só é
+transmitido quando aponta para o futuro: o schema raw distingue
+`timestamp_utc` de `quota_reset_at`, mas o teste E2E pinned mostra o primeiro a
+ser mapeado para `resetDate`. Entitlements ilimitados não incluem
+total/restante/percentagem finitos; quotas ausentes, malformadas ou
+indisponíveis devolvem apenas um código categórico fixo. Esta falha nunca
+transforma um catálogo válido numa falha de credencial. O BFF pode preservar o
+último snapshot como stale, sem persistir raw errors, bodies, headers ou token.
 
 Existe um único probe de diagnóstico para a combinação exata
 `code=-32603` + `SDK session authentication failed: network fetch failed:

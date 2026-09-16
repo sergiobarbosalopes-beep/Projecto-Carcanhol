@@ -1,7 +1,7 @@
 import {
   COPILOT_WORKER_MAX_MODELS,
   copilotModelSchema,
-  type CopilotPremiumRequestsQuota,
+  type CopilotPremiumInteractionsQuota,
   type CopilotModel,
   type SafeCopilotProbeUnknownDiagnostic,
   type SafeCopilotUnavailableDiagnostic,
@@ -22,9 +22,9 @@ import {
 
 export type CopilotRuntimeClient = {
   listModels(signal: AbortSignal): Promise<readonly unknown[]>;
-  getPremiumRequestsQuota?(
+  getPremiumInteractionsQuota?(
     signal: AbortSignal
-  ): Promise<CopilotPremiumRequestsQuota>;
+  ): Promise<CopilotPremiumInteractionsQuota>;
   close(): Promise<void>;
 };
 
@@ -111,25 +111,25 @@ export async function validateCopilotCredential({
       };
     }
 
-    let quota: CopilotPremiumRequestsQuota;
+    let quota: CopilotPremiumInteractionsQuota;
 
     try {
       const remainingMs = timeoutMs - (Date.now() - startedAt) - 500;
       quota =
-        runtime.getPremiumRequestsQuota && remainingMs > 0
+        runtime.getPremiumInteractionsQuota && remainingMs > 0
           ? await withQuotaDeadline(
-              runtime.getPremiumRequestsQuota(controller.signal),
+              runtime.getPremiumInteractionsQuota(controller.signal),
               Math.min(3_000, remainingMs)
             )
           : {
               status: "unavailable",
-              metric: "premium_requests",
+              metric: "premium_interactions",
               errorCode: "provider_quota_not_available",
             };
     } catch {
       quota = {
         status: "unavailable",
-        metric: "premium_requests",
+        metric: "premium_interactions",
         errorCode: "provider_quota_unavailable",
       };
     }
@@ -224,7 +224,7 @@ export async function validateCopilotCredential({
 }
 
 async function withQuotaDeadline(
-  quota: Promise<CopilotPremiumRequestsQuota>,
+  quota: Promise<CopilotPremiumInteractionsQuota>,
   timeoutMs: number
 ) {
   let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -232,12 +232,12 @@ async function withQuotaDeadline(
   try {
     return await Promise.race([
       quota,
-      new Promise<CopilotPremiumRequestsQuota>((resolve) => {
+      new Promise<CopilotPremiumInteractionsQuota>((resolve) => {
         timeout = setTimeout(
           () =>
             resolve({
               status: "unavailable",
-              metric: "premium_requests",
+              metric: "premium_interactions",
               errorCode: "provider_quota_unavailable",
             }),
           timeoutMs

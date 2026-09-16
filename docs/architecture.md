@@ -21,7 +21,7 @@ A Fase 3B acrescenta validação real à fundação de produto e administração
 - GitHub Copilot como provider canónico, validado através do SDK num worker;
 - descoberta e sincronização do catálogo de modelos por conta;
 - predefinição global atómica de uma combinação conta+modelo por utilizador;
-- quota account-wide de pedidos premium, isolada da telemetria de sessões;
+- utilização account-wide do GitHub Copilot, isolada da telemetria de sessões;
 - envelopes AES-256-GCM de credenciais numa tabela service-only;
 - contrato server-only para carregar futuramente Skills ativas.
 
@@ -224,9 +224,14 @@ compatível com GitHub Copilot.
   utilizador serializa trocas concorrentes. A RPC exige ownership+membership,
   conta `active` e modelo não stale;
 - `llm_account_quotas`: snapshot provider-reported por conta+capability. Nesta
-  entrega só `github_copilot/premium_requests` é permitido. Guarda valores
-  sanitizados e timestamps, nunca prompts, respostas, tokens de autenticação,
-  bodies ou headers remotos.
+  entrega só `github_copilot/premium_interactions` é permitido. Guarda unidades
+  decimais sanitizadas e timestamps, nunca prompts, respostas, tokens de
+  autenticação, bodies ou headers remotos. O schema usa nomes neutros
+  `*_units`: o SDK público ainda não expõe `tokenBasedBilling`, portanto não
+  permite distinguir com segurança “AI credits” de “Premium requests”. Não há
+  conversão por uma escala inferida. `remaining_percentage` significa
+  explicitamente percentagem restante; `reset_at` só é guardado quando o
+  provider entrega uma data futura.
 
 Preferências têm RLS ownership+membership. FK cascade e triggers removem a
 predefinição se conta/modelo for eliminado, ficar inativo ou stale. Quota é
@@ -405,17 +410,25 @@ quando o SDK os fornece. Estes valores são capacidade por pedido/modelo, não
 saldo mensal.
 
 O SDK 1.0.14 disponibiliza `account.getQuota` como API experimental, com
-pedidos usados/incluídos, percentagem restante e reset opcional. Essa quota é
-medida em pedidos premium, não em tokens. `session.usage.getMetrics` e
-`assistant.usage` medem apenas chamadas feitas na sessão desta aplicação; não
-representam o consumo total da conta no ciclo. As APIs REST de billing pessoal
-também reportam pedidos/AI credits, exigem a permissão adicional `Plan: read`
-e não cobrem planos pagos por organização.
+utilização usada/incluída, percentagem restante e `resetDate` opcional.
+`session.usage.getMetrics` e `assistant.usage` medem apenas chamadas feitas na
+sessão desta aplicação; não representam o consumo total da conta no ciclo. As
+APIs REST de billing pessoal exigem a permissão adicional `Plan: read` e não
+cobrem planos pagos por organização, pelo que não são usadas.
 
-Por isso, a UI não inventa nem estima “tokens consumidos/restantes”: apresenta
-explicitamente a métrica como indisponível. Uma futura funcionalidade poderá
-mostrar pedidos premium sob esse nome, opt-in e com o contrato experimental
-versionado, sem os rotular como tokens.
+O worker consome apenas `quotaSnapshots.premium_interactions`. O SDK tipado não
+expõe `tokenBasedBilling`, o discriminador que o GitHub usa para apresentar o
+mesmo bucket como **AI credits** ou **Premium requests** conforme o plano.
+Respeitando a proibição de casts/hacks, o contrato interno usa unidades neutras
+e preserva os valores decimais sem divisão por 1 000. A percentagem é rotulada
+explicitamente como restante. A UI nunca lhes chama tokens de prompt/contexto.
+
+O payload raw distingue `timestamp_utc`, instante de captura, de
+`quota_reset_at`, próxima reposição. Porém, o teste E2E pinned mostra
+`resetDate` a ser preenchido pelo primeiro. Por isso, o worker só o transmite
+quando é uma data futura; caso contrário a UI omite a reposição, sem inventar a
+data mensal. Quota ausente ou malformada não invalida a conta nem o catálogo e
+produz apenas estado categórico sanitizado.
 
 Fontes oficiais:
 [autenticação](https://docs.github.com/en/copilot/how-tos/copilot-sdk/auth/authenticate),
@@ -425,6 +438,8 @@ Fontes oficiais:
 e
 [persistência de sessões](https://github.com/github/copilot-sdk/blob/main/docs/features/session-persistence.md),
 [usage and billing do SDK](https://github.com/github/copilot-sdk/blob/v1.0.14/docs/features/usage-and-billing.md),
+[tipos e schema raw pinned](https://github.com/github/copilot-sdk/blob/v1.0.14/nodejs/src/generated/rpc.ts#L4744-L4792),
+[teste E2E pinned](https://github.com/github/copilot-sdk/blob/v1.0.14/nodejs/test/e2e/rpc_server.e2e.test.ts#L158-L182),
 [REST billing usage](https://docs.github.com/en/rest/billing/usage),
 [Vercel Services](https://vercel.com/kb/guide/vercel-services),
 [service bindings](https://vercel.com/docs/services/bindings) e

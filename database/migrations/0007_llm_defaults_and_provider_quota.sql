@@ -93,11 +93,11 @@ create table if not exists carcanhol.llm_account_quotas (
   metric text not null,
   status text not null,
   is_unlimited boolean,
-  included_requests bigint,
-  used_requests bigint,
-  remaining_requests bigint,
+  included_units numeric(18, 6),
+  used_units numeric(18, 6),
+  remaining_units numeric(18, 6),
   remaining_percentage numeric(5, 2),
-  overage_requests numeric(18, 4),
+  overage_units numeric(18, 6),
   usage_allowed_after_limit boolean,
   overage_allowed boolean,
   reset_at timestamptz,
@@ -114,16 +114,16 @@ create table if not exists carcanhol.llm_account_quotas (
   constraint llm_account_quotas_provider_metric_allowed
     check (
       provider = 'github_copilot'
-      and metric = 'premium_requests'
+      and metric = 'premium_interactions'
     ),
   constraint llm_account_quotas_status_allowed
     check (status in ('available', 'unavailable', 'stale')),
-  constraint llm_account_quotas_counts_nonnegative
+  constraint llm_account_quotas_units_nonnegative
     check (
-      (included_requests is null or included_requests >= 0)
-      and (used_requests is null or used_requests >= 0)
-      and (remaining_requests is null or remaining_requests >= 0)
-      and (overage_requests is null or overage_requests >= 0)
+      (included_units is null or included_units >= 0)
+      and (used_units is null or used_units >= 0)
+      and (remaining_units is null or remaining_units >= 0)
+      and (overage_units is null or overage_units >= 0)
     ),
   constraint llm_account_quotas_percentage_valid
     check (
@@ -146,8 +146,8 @@ create table if not exists carcanhol.llm_account_quotas (
       (
         status = 'available'
         and is_unlimited is not null
-        and used_requests is not null
-        and overage_requests is not null
+        and used_units is not null
+        and overage_units is not null
         and usage_allowed_after_limit is not null
         and overage_allowed is not null
         and observed_at is not null
@@ -155,13 +155,13 @@ create table if not exists carcanhol.llm_account_quotas (
         and (
           (
             is_unlimited
-            and included_requests is null
-            and remaining_requests is null
+            and included_units is null
+            and remaining_units is null
             and remaining_percentage is null
           )
           or (
             not is_unlimited
-            and included_requests is not null
+            and included_units is not null
           )
         )
       )
@@ -173,7 +173,7 @@ create table if not exists carcanhol.llm_account_quotas (
 );
 
 comment on table carcanhol.llm_account_quotas is
-  'Provider-reported account-wide usage snapshots. This is not prompt/session telemetry and stores no prompts, responses, headers or credentials.';
+  'Provider-reported account-wide usage snapshots. Unit names stay neutral because premium_interactions can mean AI credits or premium requests by plan. This is not prompt/session telemetry and stores no prompts, responses, headers or credentials.';
 
 create index if not exists llm_account_quotas_user_attempted_idx
   on carcanhol.llm_account_quotas (user_id, attempted_at desc);
@@ -189,7 +189,7 @@ set search_path = ''
 as $$
   select coalesce((case
     when jsonb_typeof(p_quota) <> 'object' then false
-    when p_quota ->> 'metric' <> 'premium_requests' then false
+    when p_quota ->> 'metric' <> 'premium_interactions' then false
     when p_quota ->> 'status' = 'unavailable' then
       p_quota - array['status', 'metric', 'errorCode'] = '{}'::jsonb
       and p_quota ->> 'errorCode' in (
@@ -202,20 +202,20 @@ as $$
         'status',
         'metric',
         'isUnlimited',
-        'includedRequests',
-        'usedRequests',
-        'remainingRequests',
+        'includedUnits',
+        'usedUnits',
+        'remainingUnits',
         'remainingPercentage',
-        'overageRequests',
+        'overageUnits',
         'usageAllowedAfterLimit',
         'overageAllowed',
         'resetAt'
       ] = '{}'::jsonb
       and jsonb_typeof(p_quota -> 'isUnlimited') = 'boolean'
-      and jsonb_typeof(p_quota -> 'usedRequests') = 'number'
-      and (p_quota ->> 'usedRequests')::numeric >= 0
-      and jsonb_typeof(p_quota -> 'overageRequests') = 'number'
-      and (p_quota ->> 'overageRequests')::numeric >= 0
+      and jsonb_typeof(p_quota -> 'usedUnits') = 'number'
+      and (p_quota ->> 'usedUnits')::numeric >= 0
+      and jsonb_typeof(p_quota -> 'overageUnits') = 'number'
+      and (p_quota ->> 'overageUnits')::numeric >= 0
       and jsonb_typeof(p_quota -> 'usageAllowedAfterLimit') = 'boolean'
       and jsonb_typeof(p_quota -> 'overageAllowed') = 'boolean'
       and (
@@ -232,19 +232,19 @@ as $$
       and (
         (
           (p_quota ->> 'isUnlimited')::boolean
-          and not (p_quota ? 'includedRequests')
-          and not (p_quota ? 'remainingRequests')
+          and not (p_quota ? 'includedUnits')
+          and not (p_quota ? 'remainingUnits')
           and not (p_quota ? 'remainingPercentage')
         )
         or (
           not (p_quota ->> 'isUnlimited')::boolean
-          and jsonb_typeof(p_quota -> 'includedRequests') = 'number'
-          and (p_quota ->> 'includedRequests')::numeric >= 0
+          and jsonb_typeof(p_quota -> 'includedUnits') = 'number'
+          and (p_quota ->> 'includedUnits')::numeric >= 0
           and (
-            not (p_quota ? 'remainingRequests')
+            not (p_quota ? 'remainingUnits')
             or (
-              jsonb_typeof(p_quota -> 'remainingRequests') = 'number'
-              and (p_quota ->> 'remainingRequests')::numeric >= 0
+              jsonb_typeof(p_quota -> 'remainingUnits') = 'number'
+              and (p_quota ->> 'remainingUnits')::numeric >= 0
             )
           )
         )
@@ -294,11 +294,11 @@ begin
       metric,
       status,
       is_unlimited,
-      included_requests,
-      used_requests,
-      remaining_requests,
+      included_units,
+      used_units,
+      remaining_units,
       remaining_percentage,
-      overage_requests,
+      overage_units,
       usage_allowed_after_limit,
       overage_allowed,
       reset_at,
@@ -310,14 +310,14 @@ begin
       p_account_id,
       p_user_id,
       account_provider,
-      'premium_requests',
+      'premium_interactions',
       'available',
       (p_quota ->> 'isUnlimited')::boolean,
-      (p_quota ->> 'includedRequests')::bigint,
-      (p_quota ->> 'usedRequests')::bigint,
-      (p_quota ->> 'remainingRequests')::bigint,
+      (p_quota ->> 'includedUnits')::numeric,
+      (p_quota ->> 'usedUnits')::numeric,
+      (p_quota ->> 'remainingUnits')::numeric,
       (p_quota ->> 'remainingPercentage')::numeric,
-      (p_quota ->> 'overageRequests')::numeric,
+      (p_quota ->> 'overageUnits')::numeric,
       (p_quota ->> 'usageAllowedAfterLimit')::boolean,
       (p_quota ->> 'overageAllowed')::boolean,
       (p_quota ->> 'resetAt')::timestamptz,
@@ -330,11 +330,11 @@ begin
       provider = excluded.provider,
       status = excluded.status,
       is_unlimited = excluded.is_unlimited,
-      included_requests = excluded.included_requests,
-      used_requests = excluded.used_requests,
-      remaining_requests = excluded.remaining_requests,
+      included_units = excluded.included_units,
+      used_units = excluded.used_units,
+      remaining_units = excluded.remaining_units,
       remaining_percentage = excluded.remaining_percentage,
-      overage_requests = excluded.overage_requests,
+      overage_units = excluded.overage_units,
       usage_allowed_after_limit = excluded.usage_allowed_after_limit,
       overage_allowed = excluded.overage_allowed,
       reset_at = excluded.reset_at,
@@ -356,7 +356,7 @@ begin
       p_account_id,
       p_user_id,
       account_provider,
-      'premium_requests',
+      'premium_interactions',
       'unavailable',
       now(),
       p_quota ->> 'errorCode'

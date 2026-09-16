@@ -420,29 +420,29 @@ export const copilotModelSchema = z
 
 export type CopilotModel = z.infer<typeof copilotModelSchema>;
 
-export const copilotPremiumRequestsQuotaSchema = z.discriminatedUnion(
+export const copilotPremiumInteractionsQuotaSchema = z.discriminatedUnion(
   "status",
   [
     z
       .object({
         status: z.literal("available"),
-        metric: z.literal("premium_requests"),
+        metric: z.literal("premium_interactions"),
         isUnlimited: z.boolean(),
-        usedRequests: z.number().int().nonnegative().max(1_000_000_000),
-        includedRequests: z
+        usedUnits: z.number().finite().nonnegative().max(1_000_000_000),
+        includedUnits: z
           .number()
-          .int()
+          .finite()
           .nonnegative()
           .max(1_000_000_000)
           .optional(),
-        remainingRequests: z
+        remainingUnits: z
           .number()
-          .int()
+          .finite()
           .nonnegative()
           .max(1_000_000_000)
           .optional(),
         remainingPercentage: z.number().min(0).max(100).optional(),
-        overageRequests: z.number().finite().nonnegative().max(1_000_000_000),
+        overageUnits: z.number().finite().nonnegative().max(1_000_000_000),
         usageAllowedAfterLimit: z.boolean(),
         overageAllowed: z.boolean(),
         resetAt: z.string().datetime({ offset: true }).optional(),
@@ -451,8 +451,8 @@ export const copilotPremiumRequestsQuotaSchema = z.discriminatedUnion(
       .superRefine((value, context) => {
         if (
           value.isUnlimited &&
-          (value.includedRequests !== undefined ||
-            value.remainingRequests !== undefined ||
+          (value.includedUnits !== undefined ||
+            value.remainingUnits !== undefined ||
             value.remainingPercentage !== undefined)
         ) {
           context.addIssue({
@@ -461,25 +461,25 @@ export const copilotPremiumRequestsQuotaSchema = z.discriminatedUnion(
           });
         }
 
-        if (!value.isUnlimited && value.includedRequests === undefined) {
+        if (!value.isUnlimited && value.includedUnits === undefined) {
           context.addIssue({
             code: "custom",
-            message: "Finite quota requires an included request count.",
+            message: "Finite quota requires an included provider-unit count.",
           });
         }
       }),
     z
       .object({
         status: z.literal("unavailable"),
-        metric: z.literal("premium_requests"),
+        metric: z.literal("premium_interactions"),
         errorCode: z.enum(COPILOT_QUOTA_ERROR_CODES),
       })
       .strict(),
   ]
 );
 
-export type CopilotPremiumRequestsQuota = z.infer<
-  typeof copilotPremiumRequestsQuotaSchema
+export type CopilotPremiumInteractionsQuota = z.infer<
+  typeof copilotPremiumInteractionsQuotaSchema
 >;
 
 export const copilotValidationRequestSchema = z
@@ -502,7 +502,7 @@ const successfulValidationSchema = z
     ok: z.literal(true),
     requestId: z.string().uuid(),
     models: z.array(copilotModelSchema).min(1).max(COPILOT_WORKER_MAX_MODELS),
-    quota: copilotPremiumRequestsQuotaSchema.optional(),
+    quota: copilotPremiumInteractionsQuotaSchema.optional(),
   })
   .strict();
 

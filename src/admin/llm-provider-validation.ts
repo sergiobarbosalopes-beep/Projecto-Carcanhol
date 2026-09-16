@@ -2,7 +2,7 @@ import "server-only";
 
 import type {
   CopilotModel,
-  CopilotPremiumRequestsQuota,
+  CopilotPremiumInteractionsQuota,
   SafeCopilotProbeUnknownDiagnostic,
   SafeCopilotWorkerInternalDiagnostic,
   SafeCopilotWorkerTransportDiagnostic,
@@ -42,7 +42,7 @@ export type LlmProviderValidationResult =
   | {
       ok: true;
       models: CopilotModel[];
-      quota: CopilotPremiumRequestsQuota;
+      quota: CopilotPremiumInteractionsQuota;
     }
   | {
       ok: false;
@@ -91,7 +91,7 @@ const validators: Partial<Record<LlmProvider, LlmProviderValidator>> = {
           models: result.models,
           quota: result.quota ?? {
             status: "unavailable",
-            metric: "premium_requests",
+            metric: "premium_interactions",
             errorCode: "provider_quota_not_available",
           },
         };

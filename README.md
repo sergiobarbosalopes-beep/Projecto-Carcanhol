@@ -10,8 +10,8 @@ globais, Skills manuais e configuração segura de várias contas LLM por
 utilizador. Contas GitHub Copilot são autenticadas num worker isolado antes de
 serem persistidas, o catálogo de modelos é sincronizado, uma combinação
 conta+modelo pode ser escolhida como predefinição global e a utilização
-account-wide de pedidos premium é atualizada através do SDK. Pesquisa, Chat e
-Análises continuam sem geração LLM nem dados financeiros.
+account-wide disponibilizada pelo GitHub Copilot é atualizada através do SDK.
+Pesquisa, Chat e Análises continuam sem geração LLM nem dados financeiros.
 
 ## Stack
 
@@ -31,9 +31,9 @@ triggers globais em `auth.users` e não concedem membership automaticamente.
 - navegação para Início, Pesquisa, Chat, Análises e Administração;
 - administração numa página com tabs responsivas:
   - **LLM:** validação real, revalidação manual/automática, catálogo identificado
-    por fornecedor+conta, predefinição global e pedidos premium do GitHub
-    Copilot; os restantes adapters continuam preparados mas não podem ser
-    ativados sem validação real;
+    por fornecedor+conta, predefinição global e utilização account-wide do
+    GitHub Copilot; os restantes adapters continuam preparados mas não podem
+    ser ativados sem validação real;
   - **Skills:** pesquisa paginada, criação manual, consulta, edição,
     duplicação, ativação, desativação, arquivo, restauro e eliminação
     definitiva reforçada;
@@ -248,11 +248,14 @@ Após descobrir os modelos, o worker chama também a operação oficial
 experimental `client.rpc.account.getQuota({ gitHubToken })` do
 `@github/copilot-sdk@1.0.14`/CLI 1.0.85 e usa apenas
 `quotaSnapshots.premium_interactions`. A UI chama corretamente à métrica
-**Pedidos premium**, nunca tokens. Mostra usados, incluídos/restantes quando a
-quota é finita, percentagem, overage e reset quando fornecidos; entitlement
-ilimitado e valores ausentes são representados sem inventar totais. O restante
-é derivado apenas para entitlement finito como
-`max(0, incluídos - usados)`. Uma falha
+**Utilização do GitHub Copilot**, nunca tokens. Como a operação tipada não
+expõe se `premium_interactions` representa créditos de IA ou pedidos premium
+para aquele plano, a UI identifica a chave oficial e mostra unidades do
+fornecedor sem conversão inventada. Mostra unidades utilizadas,
+incluídas/restantes quando a quota é finita, a **percentagem restante**,
+overage e apenas uma reposição futura inequívoca; entitlement ilimitado e
+valores ausentes são representados sem inventar totais. O restante é derivado
+apenas para entitlement finito como `max(0, incluídos - utilizados)`. Uma falha
 de quota não invalida credencial nem catálogo: conserva o último snapshot como
 stale, ou mostra “Não disponível” quando nunca existiu um valor.
 Não são pedidas permissões adicionais: a operação usa a mesma credencial já
@@ -261,15 +264,28 @@ validada para a conta.
 A atualização automática de conta/modelos/quota usa TTL de 15 minutos para
 evitar chamadas repetidas ao abrir a Administração; “Validar novamente” força
 uma atualização. O snapshot persiste por conta e capability
-`premium_requests`, permitindo outros providers no futuro sem fingir que
+`premium_interactions`, permitindo outros providers no futuro sem fingir que
 Anthropic partilha a métrica do Copilot. Não são persistidos prompts, respostas
 ou utilização de sessões.
+
+Os valores são preservados como unidades decimais devolvidas pelo provider,
+sem divisão por 1 000. O tipo público pinned chama “requests” aos campos, mas
+não inclui o sinal `tokenBasedBilling` que o GitHub usa para apresentar
+`premium_interactions` como **AI credits** ou **Premium requests** conforme o
+plano. A aplicação não usa casts para aceder a esse campo não tipado. Além
+disso, `resetDate` só é propagado como próxima reposição quando é futuro, porque
+o teste E2E pinned demonstra que o runtime o preenche a partir do
+`timestamp_utc` do próprio snapshot, apesar de o payload raw também ter o campo
+distinto `quota_reset_at`.
 
 Fontes oficiais do contrato pinned:
 
 - [SDK v1.0.14](https://github.com/github/copilot-sdk/releases/tag/v1.0.14);
 - [`account.getQuota` e tipos gerados](https://github.com/github/copilot-sdk/blob/v1.0.14/nodejs/src/generated/rpc.ts#L4975-L5040);
-- [guia Usage and billing](https://github.com/github/copilot-sdk/blob/v1.0.14/docs/features/usage-and-billing.md#L1139-L1173).
+- [guia Usage and billing](https://github.com/github/copilot-sdk/blob/v1.0.14/docs/features/usage-and-billing.md#L1139-L1173);
+- [teste E2E pinned: valores sem escala e `resetDate` vindo do timestamp do snapshot](https://github.com/github/copilot-sdk/blob/v1.0.14/nodejs/test/e2e/rpc_server.e2e.test.ts#L158-L182);
+- [GitHub Desktop: distinção entre AI credits e Premium requests](https://github.com/desktop/desktop/blob/e25aac9bbce8e4431d81e79c81cc61d5b83d7cf0/app/src/ui/preferences/snapshot-card.tsx);
+- [GitHub Desktop: `tokenBasedBilling` ainda ausente do tipo público do SDK](https://github.com/desktop/desktop/blob/e25aac9bbce8e4431d81e79c81cc61d5b83d7cf0/app/src/lib/stores/copilot-store.ts).
 
 ## Scripts
 

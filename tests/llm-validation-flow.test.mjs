@@ -232,7 +232,12 @@ test("migration atomically enforces owned eligible global defaults and quota lif
     migration,
     /create table if not exists carcanhol\.llm_account_quotas/
   );
-  assert.match(migration, /metric = 'premium_requests'/);
+  assert.match(migration, /metric = 'premium_interactions'/);
+  assert.match(migration, /included_units numeric\(18, 6\)/);
+  assert.match(migration, /used_units numeric\(18, 6\)/);
+  assert.match(migration, /remaining_units numeric\(18, 6\)/);
+  assert.match(migration, /overage_units numeric\(18, 6\)/);
+  assert.doesNotMatch(migration, /included_requests bigint/);
   assert.match(migration, /status in \('available', 'unavailable', 'stale'\)/);
   assert.match(migration, /provider_validation_failed/);
   assert.match(migration, /credential_changed/);
@@ -284,7 +289,11 @@ test("LLM cards expose accessible manual and automatic validation states", () =>
   assert.match(panel, /Conta:/);
   assert.match(panel, /★ Predefinido/);
   assert.match(panel, /Definir como predefinido/);
-  assert.match(panel, /Pedidos premium/);
+  assert.match(panel, /Utilização do GitHub Copilot/);
+  assert.match(panel, /premium_interactions/);
+  assert.match(panel, /créditos de IA ou\s+pedidos/);
+  assert.match(panel, /Percentagem restante/);
+  assert.match(panel, /Próxima reposição/);
   assert.match(panel, /account-wide/);
   assert.match(panel, /Ilimitados/);
   assert.match(panel, /Desatualizado/);

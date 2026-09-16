@@ -39,7 +39,7 @@ const PUBLIC_ACCOUNT_COLUMNS =
 const PUBLIC_MODEL_COLUMNS =
   "id, user_id, account_id, provider_model_id, display_name, enabled, discovery_metadata, is_stale, discovered_at, last_seen_at, created_at, updated_at";
 const PUBLIC_QUOTA_COLUMNS =
-  "account_id, user_id, provider, metric, status, is_unlimited, included_requests, used_requests, remaining_requests, remaining_percentage, overage_requests, usage_allowed_after_limit, overage_allowed, reset_at, observed_at, attempted_at, error_code, created_at, updated_at";
+  "account_id, user_id, provider, metric, status, is_unlimited, included_units, used_units, remaining_units, remaining_percentage, overage_units, usage_allowed_after_limit, overage_allowed, reset_at, observed_at, attempted_at, error_code, created_at, updated_at";
 
 export type RevalidateLlmAccountResult = {
   account: LlmAccountPublic;
@@ -685,7 +685,7 @@ async function listQuotasForAccounts(
     .from("llm_account_quotas")
     .select(PUBLIC_QUOTA_COLUMNS)
     .eq("user_id", userId)
-    .eq("metric", "premium_requests")
+    .eq("metric", "premium_interactions")
     .in("account_id", accountIds);
 
   if (error) {
