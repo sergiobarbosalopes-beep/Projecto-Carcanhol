@@ -183,6 +183,18 @@ test("LLM cards expose accessible manual and automatic validation states", () =>
   assert.match(panel, /aria-busy=\{validatingIds\.has\(account\.id\)\}/);
   assert.match(panel, /aria-live="polite"/);
   assert.match(panel, /catálogo preservado; conta indisponível/);
+  assert.match(panel, /function ModelCatalogSection/);
+  assert.match(panel, /Modelos disponíveis/);
+  assert.match(panel, /account\.models\.map/);
+  assert.match(panel, /model\.provider_model_id/);
+  assert.match(panel, /maxContextWindowTokens/);
+  assert.match(panel, /Disponível · autorização pendente/);
+  assert.match(panel, /Utilização de tokens no ciclo/);
+  assert.match(panel, /Tokens consumidos/);
+  assert.match(panel, /Tokens restantes/);
+  assert.match(panel, /Métrica não disponibilizada/);
+  assert.match(panel, /quota experimental em pedidos premium/);
+  assert.doesNotMatch(panel, /function FutureSection/);
 });
 
 test("safe diagnostics are ephemeral and limited to owned revalidation responses", () => {

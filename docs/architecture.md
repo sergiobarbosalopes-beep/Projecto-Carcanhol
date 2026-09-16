@@ -388,6 +388,26 @@ versão web multiutilizador, evitando a recolha manual permanente de PATs. Um
 refresh token futuro, caso exista, continuará cifrado na tabela service-only;
 não será guardado em metadados públicos.
 
+#### Modelos, limites e utilização
+
+O catálogo visível na Administração vem de `session.rpc.model.list({})` e
+mostra os modelos atuais por conta, incluindo os limites de prompt/contexto
+quando o SDK os fornece. Estes valores são capacidade por pedido/modelo, não
+saldo mensal.
+
+O SDK 1.0.14 disponibiliza `account.getQuota` como API experimental, com
+pedidos usados/incluídos, percentagem restante e reset opcional. Essa quota é
+medida em pedidos premium, não em tokens. `session.usage.getMetrics` e
+`assistant.usage` medem apenas chamadas feitas na sessão desta aplicação; não
+representam o consumo total da conta no ciclo. As APIs REST de billing pessoal
+também reportam pedidos/AI credits, exigem a permissão adicional `Plan: read`
+e não cobrem planos pagos por organização.
+
+Por isso, a UI não inventa nem estima “tokens consumidos/restantes”: apresenta
+explicitamente a métrica como indisponível. Uma futura funcionalidade poderá
+mostrar pedidos premium sob esse nome, opt-in e com o contrato experimental
+versionado, sem os rotular como tokens.
+
 Fontes oficiais:
 [autenticação](https://docs.github.com/en/copilot/how-tos/copilot-sdk/auth/authenticate),
 [backend services](https://docs.github.com/en/copilot/how-tos/copilot-sdk/setup/backend-services),
@@ -395,6 +415,8 @@ Fontes oficiais:
 [runtime incluído](https://github.com/github/copilot-sdk/blob/main/docs/setup/bundled-cli.md)
 e
 [persistência de sessões](https://github.com/github/copilot-sdk/blob/main/docs/features/session-persistence.md),
+[usage and billing do SDK](https://github.com/github/copilot-sdk/blob/v1.0.14/docs/features/usage-and-billing.md),
+[REST billing usage](https://docs.github.com/en/rest/billing/usage),
 [Vercel Services](https://vercel.com/kb/guide/vercel-services),
 [service bindings](https://vercel.com/docs/services/bindings) e
 [container images](https://vercel.com/docs/functions/container-images).

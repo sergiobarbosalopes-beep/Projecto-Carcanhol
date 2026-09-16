@@ -226,6 +226,13 @@ formulário manual. OAuth/GitHub App user-to-server será a opção recomendada
 para uma aplicação web multiutilizador. O acesso normal requer uma subscrição
 GitHub Copilot; BYOK é a exceção documentada pelo SDK.
 
+O catálogo sincronizado é apresentado integralmente na Administração, com os
+limites de prompt/contexto que o SDK disponibiliza. O GitHub não expõe um
+total account-wide de tokens consumidos ou restantes no ciclo para esta
+credencial. A quota experimental do SDK e as APIs de billing usam pedidos
+premium/AI credits, não tokens; a UI assinala a indisponibilidade em vez de
+mostrar uma estimativa enganadora ou exigir permissões adicionais.
+
 ## Scripts
 
 | Script                 | Descrição                   |

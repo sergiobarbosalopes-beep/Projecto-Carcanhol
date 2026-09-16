@@ -243,6 +243,14 @@ export function LlmPanel({
   const activeCount = accounts.filter(
     (account) => account.status === "active"
   ).length;
+  const availableModelCount = accounts.reduce(
+    (total, account) =>
+      total +
+      (account.status === "active"
+        ? account.models.filter((model) => !model.is_stale).length
+        : 0),
+    0
+  );
 
   return (
     <div className="min-w-0">
@@ -265,7 +273,7 @@ export function LlmPanel({
         </button>
       </div>
 
-      <div className="mt-6 grid gap-3 sm:grid-cols-3">
+      <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <SummaryCard
           label="Contas configuradas"
           value={accounts.length.toLocaleString("pt-PT")}
@@ -277,6 +285,10 @@ export function LlmPanel({
         <SummaryCard
           label="Contas ativas"
           value={activeCount.toLocaleString("pt-PT")}
+        />
+        <SummaryCard
+          label="Modelos disponíveis"
+          value={availableModelCount.toLocaleString("pt-PT")}
         />
       </div>
 
@@ -419,15 +431,9 @@ export function LlmPanel({
         )}
       </section>
 
-      <div className="mt-8 grid gap-4 lg:grid-cols-2">
-        <FutureSection
-          title="Modelos e encaminhamento"
-          description="O catálogo é sincronizado automaticamente. A autorização manual, o modelo geral, regras por funcionalidade e fallbacks ordenados serão o passo seguinte; nenhum modelo descoberto é ativado automaticamente."
-        />
-        <FutureSection
-          title="Utilização"
-          description="Tokens de entrada e saída, latência, estado e custo estimado serão apresentados após existir execução LLM. Prompts e respostas não farão parte desta telemetria."
-        />
+      <div className="mt-8 grid gap-4">
+        <ModelCatalogSection accounts={accounts} />
+        <UsageAvailabilitySection />
       </div>
     </div>
   );
@@ -534,42 +540,6 @@ function AccountCard({
           A validação real deste fornecedor ainda não está disponível; esta
           conta não é ativada automaticamente.
         </p>
-      )}
-
-      {account.models.length > 0 && (
-        <details className="mt-4 rounded-lg border border-slate-200">
-          <summary className="flex min-h-11 cursor-pointer items-center px-3 text-sm font-bold text-slate-800">
-            Catálogo de modelos
-          </summary>
-          <ul className="border-t border-slate-200 px-3 py-2">
-            {account.models.map((model) => (
-              <li
-                key={model.id}
-                className="flex min-h-11 items-center justify-between gap-3 border-b border-slate-100 py-2 text-sm last:border-0"
-              >
-                <span className="min-w-0">
-                  <span className="block break-words font-semibold text-slate-900">
-                    {model.display_name}
-                  </span>
-                  <span className="block break-all font-mono text-xs text-slate-500">
-                    {model.provider_model_id}
-                  </span>
-                </span>
-                <span className="shrink-0 text-xs font-semibold text-slate-500">
-                  {model.is_stale
-                    ? "Catálogo anterior"
-                    : transientFailure
-                      ? model.enabled
-                        ? "Seleção preservada; conta indisponível"
-                        : "Catálogo preservado; não autorizado"
-                      : model.enabled
-                        ? "Autorizado"
-                        : "A aguardar autorização"}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </details>
       )}
 
       <div className="mt-4 flex flex-wrap gap-2 border-t border-slate-200 pt-4">
@@ -1057,22 +1027,173 @@ function SummaryCard({ label, value }: { label: string; value: string }) {
   );
 }
 
-function FutureSection({
-  title,
-  description,
-}: {
-  title: string;
-  description: string;
-}) {
+function ModelCatalogSection({ accounts }: { accounts: LlmAccountPublic[] }) {
+  const catalogAccounts = accounts.filter(
+    (account) => account.models.length > 0
+  );
+  const availableCount = catalogAccounts.reduce(
+    (total, account) =>
+      total +
+      (account.status === "active"
+        ? account.models.filter((model) => !model.is_stale).length
+        : 0),
+    0
+  );
+
+  return (
+    <section
+      className="rounded-xl border border-slate-200 bg-white p-4 sm:p-5"
+      aria-labelledby="llm-model-catalog-heading"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3
+            id="llm-model-catalog-heading"
+            className="font-bold text-slate-950"
+          >
+            Modelos disponíveis
+          </h3>
+          <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
+            Catálogo devolvido pelas contas validadas. Os modelos continuam
+            desativados até existir autorização manual.
+          </p>
+        </div>
+        <span
+          role="status"
+          aria-live="polite"
+          className="inline-flex min-h-8 items-center rounded-full bg-teal-100 px-3 text-xs font-bold text-teal-900"
+        >
+          {availableCount.toLocaleString("pt-PT")} disponíveis
+        </span>
+      </div>
+
+      {catalogAccounts.length === 0 ? (
+        <p className="mt-4 rounded-lg bg-slate-50 p-4 text-sm text-slate-600">
+          Valide uma conta GitHub Copilot para descobrir os modelos disponíveis.
+        </p>
+      ) : (
+        <div className="mt-5 space-y-5">
+          {catalogAccounts.map((account) => (
+            <section
+              key={account.id}
+              aria-labelledby={`llm-model-account-${account.id}`}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h4
+                  id={`llm-model-account-${account.id}`}
+                  className="text-sm font-bold text-slate-900"
+                >
+                  {account.display_name}
+                </h4>
+                <span className="text-xs font-semibold text-slate-500">
+                  {account.models.length.toLocaleString("pt-PT")} no catálogo
+                </span>
+              </div>
+              <ul className="mt-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                {account.models.map((model) => {
+                  const maxPromptTokens = modelCapabilityNumber(
+                    model.capabilities,
+                    "maxPromptTokens"
+                  );
+                  const maxContextTokens = modelCapabilityNumber(
+                    model.capabilities,
+                    "maxContextWindowTokens"
+                  );
+
+                  return (
+                    <li
+                      key={model.id}
+                      className="min-w-0 rounded-lg border border-slate-200 bg-slate-50 p-3"
+                    >
+                      <p className="break-words text-sm font-bold text-slate-950">
+                        {model.display_name}
+                      </p>
+                      <p className="mt-1 break-all font-mono text-xs text-slate-500">
+                        {model.provider_model_id}
+                      </p>
+                      {(maxPromptTokens || maxContextTokens) && (
+                        <p className="mt-2 text-xs leading-5 text-slate-600">
+                          {maxPromptTokens &&
+                            `Prompt: ${formatTokenLimit(maxPromptTokens)}`}
+                          {maxPromptTokens && maxContextTokens ? " · " : ""}
+                          {maxContextTokens &&
+                            `Contexto: ${formatTokenLimit(maxContextTokens)}`}
+                        </p>
+                      )}
+                      <p className="mt-2 text-xs font-semibold text-slate-600">
+                        {modelCatalogStatus(account, model)}
+                      </p>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function UsageAvailabilitySection() {
   return (
     <section className="rounded-xl border border-slate-200 bg-slate-50 p-5">
       <span className="inline-flex rounded-full bg-slate-200 px-2 py-1 text-xs font-bold text-slate-700">
-        Disponível após integração
+        Métrica não disponibilizada
       </span>
-      <h3 className="mt-3 font-bold text-slate-950">{title}</h3>
-      <p className="mt-2 text-sm leading-6 text-slate-600">{description}</p>
+      <h3 className="mt-3 font-bold text-slate-950">
+        Utilização de tokens no ciclo
+      </h3>
+      <dl className="mt-4 grid gap-3 sm:grid-cols-2">
+        <Metadata label="Tokens consumidos">Não disponível</Metadata>
+        <Metadata label="Tokens restantes">Não disponível</Metadata>
+      </dl>
+      <p className="mt-4 text-sm leading-6 text-slate-600">
+        O GitHub Copilot não disponibiliza um total de tokens por utilizador
+        para o ciclo atual. O SDK expõe métricas apenas da sessão executada
+        nesta aplicação e uma quota experimental em pedidos premium, que não
+        equivale a tokens. Para evitar números enganadores, não apresentamos
+        estimativas.
+      </p>
     </section>
   );
+}
+
+function modelCapabilityNumber(
+  capabilities: LlmAccountPublic["models"][number]["capabilities"],
+  key: "maxPromptTokens" | "maxContextWindowTokens"
+) {
+  if (
+    typeof capabilities !== "object" ||
+    capabilities === null ||
+    Array.isArray(capabilities)
+  ) {
+    return null;
+  }
+
+  const value = capabilities[key];
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : null;
+}
+
+function formatTokenLimit(value: number) {
+  return `${value.toLocaleString("pt-PT")} tokens`;
+}
+
+function modelCatalogStatus(
+  account: LlmAccountPublic,
+  model: LlmAccountPublic["models"][number]
+) {
+  if (model.is_stale) {
+    return "Catálogo anterior";
+  }
+
+  if (account.status !== "active") {
+    return "Preservado · conta indisponível";
+  }
+
+  return model.enabled ? "Autorizado" : "Disponível · autorização pendente";
 }
 
 function Metadata({
