@@ -181,6 +181,8 @@ test("pins the SDK and configures empty mode without logged-in fallback", () => 
   assert.doesNotMatch(adapter, /client\.rpc\.models\.list/);
   assert.match(adapter, /client\.createSession/);
   assert.match(adapter, /session\.rpc\.model\.list/);
+  assert.match(adapter, /client\.rpc\.account\.getQuota/);
+  assert.match(adapter, /gitHubToken: this\.token/);
   assert.match(adapter, /activeSession\.disconnect/);
   assert.match(adapter, /client\.deleteSession/);
   assert.doesNotMatch(adapter, /\.send(?:AndWait)?\(/);

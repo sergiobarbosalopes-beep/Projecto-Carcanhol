@@ -11,9 +11,13 @@ worker. A cobertura inclui:
 - Redis com claim atómico, reconexão bounded e readiness unhealthy/recovery;
 - schema estrito/CORS fechado e ausência do PAT nas respostas;
 - sanitização de modelos, policy, timeout e error mapping;
+- quota normal, ilimitada, ausente, malformada e com reset, incluindo falha
+  independente sem invalidar o catálogo;
 - redaction adversarial, bounds e transporte efémero do diagnóstico `unknown`;
 - invariantes da migration 0005 para transação, sync/stale, stale writes e
-  preservação do catálogo em falhas transitórias.
+  preservação do catálogo em falhas transitórias;
+- invariantes da migration 0007 para predefinição global atómica, ownership,
+  elegibilidade, cleanup e persistência de quota provider-reported.
 
 O adapter do SDK é substituído por mocks em CI. O teste real é deliberadamente
 separado e requer `COPILOT_REAL_TEST_TOKEN`:

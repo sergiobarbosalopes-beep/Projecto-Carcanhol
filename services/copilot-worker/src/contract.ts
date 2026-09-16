@@ -19,6 +19,11 @@ export const COPILOT_WORKER_MAX_BODY_BYTES = 8 * 1024;
 export const COPILOT_WORKER_MAX_RESPONSE_BYTES = 256 * 1024;
 export const COPILOT_WORKER_MAX_MODELS = 100;
 export const COPILOT_TOKEN_MAX_LENGTH = 4096;
+export const COPILOT_QUOTA_ERROR_CODES = [
+  "provider_quota_unavailable",
+  "provider_quota_not_available",
+  "malformed_provider_quota",
+] as const;
 
 export const COPILOT_WORKER_HEADERS = {
   bodySha256: "x-carcanhol-content-sha256",
@@ -415,6 +420,68 @@ export const copilotModelSchema = z
 
 export type CopilotModel = z.infer<typeof copilotModelSchema>;
 
+export const copilotPremiumInteractionsQuotaSchema = z.discriminatedUnion(
+  "status",
+  [
+    z
+      .object({
+        status: z.literal("available"),
+        metric: z.literal("premium_interactions"),
+        isUnlimited: z.boolean(),
+        usedUnits: z.number().finite().nonnegative().max(1_000_000_000),
+        includedUnits: z
+          .number()
+          .finite()
+          .nonnegative()
+          .max(1_000_000_000)
+          .optional(),
+        remainingUnits: z
+          .number()
+          .finite()
+          .nonnegative()
+          .max(1_000_000_000)
+          .optional(),
+        remainingPercentage: z.number().min(0).max(100).optional(),
+        overageUnits: z.number().finite().nonnegative().max(1_000_000_000),
+        usageAllowedAfterLimit: z.boolean(),
+        overageAllowed: z.boolean(),
+        resetAt: z.string().datetime({ offset: true }).optional(),
+      })
+      .strict()
+      .superRefine((value, context) => {
+        if (
+          value.isUnlimited &&
+          (value.includedUnits !== undefined ||
+            value.remainingUnits !== undefined ||
+            value.remainingPercentage !== undefined)
+        ) {
+          context.addIssue({
+            code: "custom",
+            message: "Unlimited quota must not expose a finite allowance.",
+          });
+        }
+
+        if (!value.isUnlimited && value.includedUnits === undefined) {
+          context.addIssue({
+            code: "custom",
+            message: "Finite quota requires an included provider-unit count.",
+          });
+        }
+      }),
+    z
+      .object({
+        status: z.literal("unavailable"),
+        metric: z.literal("premium_interactions"),
+        errorCode: z.enum(COPILOT_QUOTA_ERROR_CODES),
+      })
+      .strict(),
+  ]
+);
+
+export type CopilotPremiumInteractionsQuota = z.infer<
+  typeof copilotPremiumInteractionsQuotaSchema
+>;
+
 export const copilotValidationRequestSchema = z
   .object({
     requestId: z.string().uuid(),
@@ -435,6 +502,7 @@ const successfulValidationSchema = z
     ok: z.literal(true),
     requestId: z.string().uuid(),
     models: z.array(copilotModelSchema).min(1).max(COPILOT_WORKER_MAX_MODELS),
+    quota: copilotPremiumInteractionsQuotaSchema.optional(),
   })
   .strict();
 

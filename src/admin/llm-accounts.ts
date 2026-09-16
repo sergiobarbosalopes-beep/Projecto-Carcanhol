@@ -26,6 +26,7 @@ import {
 import type {
   Json,
   LlmAccount,
+  LlmAccountQuota,
   LlmAccountModel,
   LlmAccountModelPublic,
   LlmAccountPublic,
@@ -36,7 +37,11 @@ import type {
 const PUBLIC_ACCOUNT_COLUMNS =
   "id, user_id, provider, display_name, credential_type, status, custom_endpoint, credential_suffix, credential_updated_at, last_validation_status, last_validation_at, last_validation_error_code, validation_generation, last_validation_request_id, created_at, updated_at";
 const PUBLIC_MODEL_COLUMNS =
-  "id, user_id, account_id, provider_model_id, display_name, enabled, discovery_metadata, is_stale, discovered_at, last_seen_at, created_at, updated_at";
+  "id, user_id, account_id, provider_model_id, display_name, discovery_metadata, is_stale, discovered_at, last_seen_at, created_at, updated_at";
+const PUBLIC_QUOTA_COLUMNS =
+  "account_id, user_id, provider, metric, status, is_unlimited, included_units, used_units, remaining_units, remaining_percentage, overage_units, usage_allowed_after_limit, overage_allowed, reset_at, observed_at, attempted_at, error_code, created_at, updated_at";
+
+type CurrentLlmAccountModel = Omit<LlmAccountModel, "enabled">;
 
 export type RevalidateLlmAccountResult = {
   account: LlmAccountPublic;
@@ -87,14 +92,20 @@ export async function listLlmAccounts(
     });
   }
 
-  const models = await listModelsForAccounts(
-    client,
-    userId,
-    data.map((account) => account.id)
-  );
+  const accountIds = data.map((account) => account.id);
+  const [models, defaultModelId, quotas] = await Promise.all([
+    listModelsForAccounts(client, userId, accountIds),
+    getGlobalDefaultModelId(client, userId),
+    listQuotasForAccounts(client, userId, accountIds),
+  ]);
 
   return data.map((account) =>
-    toPublicAccount(account, models.get(account.id) ?? [])
+    toPublicAccount(
+      account,
+      models.get(account.id) ?? [],
+      defaultModelId,
+      quotas.get(account.id) ?? null
+    )
   );
 }
 
@@ -120,7 +131,7 @@ export async function createLlmAccount(
         input.credential,
         validationRequestId
       ),
-    persist: async (models) => {
+    persist: async (models, quota) => {
       const accountId = randomUUID();
       const encrypted = encryptCredentialForStorage(input.credential, {
         userId,
@@ -148,6 +159,7 @@ export async function createLlmAccount(
           p_key_version: encrypted.keyVersion,
           p_validation_request_id: validationRequestId,
           p_models: models as Json,
+          p_quota: quota as Json,
         })
         .single();
 
@@ -282,6 +294,7 @@ async function revalidateLlmAccountOnce(
       p_succeeded: validation.ok,
       p_error_code: validation.ok ? null : validation.code,
       p_models: validation.ok ? (validation.models as Json) : [],
+      p_quota: validation.ok ? (validation.quota as Json) : null,
     }
   );
 
@@ -540,7 +553,16 @@ async function getOwnedPublicAccount(
   }
 
   const models = await listModelsForAccounts(client, userId, [accountId]);
-  return toPublicAccount(account, models.get(accountId) ?? []);
+  const [defaultModelId, quotas] = await Promise.all([
+    getGlobalDefaultModelId(client, userId),
+    listQuotasForAccounts(client, userId, [accountId]),
+  ]);
+  return toPublicAccount(
+    account,
+    models.get(accountId) ?? [],
+    defaultModelId,
+    quotas.get(accountId) ?? null
+  );
 }
 
 async function listModelsForAccounts(
@@ -548,7 +570,7 @@ async function listModelsForAccounts(
   userId: string,
   accountIds: string[]
 ) {
-  const byAccount = new Map<string, LlmAccountModel[]>();
+  const byAccount = new Map<string, CurrentLlmAccountModel[]>();
 
   if (accountIds.length === 0) {
     return byAccount;
@@ -582,7 +604,9 @@ function credentialSuffix(credential: string) {
 
 function toPublicAccount(
   account: LlmAccount,
-  models: LlmAccountModel[]
+  models: CurrentLlmAccountModel[],
+  defaultModelId: string | null,
+  quota: LlmAccountQuota | null
 ): LlmAccountPublic {
   return {
     id: account.id,
@@ -598,11 +622,15 @@ function toPublicAccount(
     last_validation_error_code: account.last_validation_error_code,
     created_at: account.created_at,
     updated_at: account.updated_at,
-    models: models.map(toPublicModel),
+    models: models.map((model) => toPublicModel(model, defaultModelId)),
+    quota: quota ? toPublicQuota(quota) : null,
   };
 }
 
-function toPublicModel(model: LlmAccountModel): LlmAccountModelPublic {
+function toPublicModel(
+  model: CurrentLlmAccountModel,
+  defaultModelId: string | null
+): LlmAccountModelPublic {
   const metadata =
     typeof model.discovery_metadata === "object" &&
     model.discovery_metadata !== null &&
@@ -614,7 +642,7 @@ function toPublicModel(model: LlmAccountModel): LlmAccountModelPublic {
     id: model.id,
     provider_model_id: model.provider_model_id,
     display_name: model.display_name,
-    enabled: model.enabled,
+    is_default: model.id === defaultModelId,
     is_stale: model.is_stale,
     discovered_at: model.discovered_at,
     last_seen_at: model.last_seen_at,
@@ -622,6 +650,88 @@ function toPublicModel(model: LlmAccountModel): LlmAccountModelPublic {
     policy: metadata.policy ?? {},
     billing: metadata.billing ?? {},
   };
+}
+
+async function getGlobalDefaultModelId(
+  client: CarcanholClient,
+  userId: string
+) {
+  const { data, error } = await client
+    .from("llm_model_preferences")
+    .select("account_model_id")
+    .eq("user_id", userId)
+    .eq("scope", "global")
+    .maybeSingle();
+
+  if (error) {
+    throw new Error("Não foi possível carregar a predefinição LLM.", {
+      cause: error,
+    });
+  }
+
+  return data?.account_model_id ?? null;
+}
+
+async function listQuotasForAccounts(
+  client: CarcanholClient,
+  userId: string,
+  accountIds: string[]
+) {
+  const byAccount = new Map<string, LlmAccountQuota>();
+
+  if (accountIds.length === 0) {
+    return byAccount;
+  }
+
+  const { data, error } = await client
+    .from("llm_account_quotas")
+    .select(PUBLIC_QUOTA_COLUMNS)
+    .eq("user_id", userId)
+    .eq("metric", "premium_interactions")
+    .in("account_id", accountIds);
+
+  if (error) {
+    throw new Error("Não foi possível carregar a quota LLM.", {
+      cause: error,
+    });
+  }
+
+  for (const quota of data) {
+    byAccount.set(quota.account_id, quota);
+  }
+
+  return byAccount;
+}
+
+function toPublicQuota(quota: LlmAccountQuota) {
+  const { user_id: userId, ...publicQuota } = quota;
+  void userId;
+  return publicQuota;
+}
+
+export async function setGlobalLlmDefault(
+  userId: string,
+  accountModelId: string
+): Promise<string> {
+  const client = await createAuthorizedClient(userId);
+  const { data, error } = await client.rpc("set_global_llm_default", {
+    p_user_id: userId,
+    p_account_model_id: accountModelId,
+  });
+
+  if (error) {
+    if (error.code === "22023") {
+      throw new LlmAccountLifecycleError(
+        "Só pode predefinir um modelo atual de uma conta ativa."
+      );
+    }
+
+    throw new Error("Não foi possível alterar a predefinição LLM.", {
+      cause: error,
+    });
+  }
+
+  return data;
 }
 
 export class LlmAccountConflictError extends Error {}

@@ -2,6 +2,7 @@ import "server-only";
 
 import type {
   CopilotModel,
+  CopilotPremiumInteractionsQuota,
   SafeCopilotProbeUnknownDiagnostic,
   SafeCopilotWorkerInternalDiagnostic,
   SafeCopilotWorkerTransportDiagnostic,
@@ -38,7 +39,11 @@ type WorkerTimeoutDiagnostic = Extract<
 >;
 
 export type LlmProviderValidationResult =
-  | { ok: true; models: CopilotModel[] }
+  | {
+      ok: true;
+      models: CopilotModel[];
+      quota: CopilotPremiumInteractionsQuota;
+    }
   | {
       ok: false;
       code: "unknown";
@@ -81,7 +86,15 @@ const validators: Partial<Record<LlmProvider, LlmProviderValidator>> = {
       const result = await validateWithCopilotWorker(credential, requestId);
 
       if (result.ok) {
-        return { ok: true, models: result.models };
+        return {
+          ok: true,
+          models: result.models,
+          quota: result.quota ?? {
+            status: "unavailable",
+            metric: "premium_interactions",
+            errorCode: "provider_quota_not_available",
+          },
+        };
       }
 
       if (result.code === "unknown") {

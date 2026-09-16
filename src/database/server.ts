@@ -17,7 +17,12 @@ import { cookies } from "next/headers";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/src/types/supabase";
 import { authCookieOptions } from "@/src/database/cookie-options";
-import { getAuthEnv, getPublicEnv, getServerEnv } from "@/src/utils/env";
+import {
+  getAuthEnv,
+  getDatabaseEnv,
+  getPublicEnv,
+  getServerEnv,
+} from "@/src/utils/env";
 
 export type CarcanholClient = ReturnType<
   typeof createSupabaseClient<Database, "carcanhol">
@@ -27,13 +32,14 @@ export async function createClient() {
   const cookieStore = await cookies();
   const { NEXT_PUBLIC_SUPABASE_URL } = getPublicEnv();
   const { NEXT_SUPABASE_ANON_KEY } = getAuthEnv();
+  const { SUPABASE_SCHEMA } = getDatabaseEnv();
 
   return createServerClient<Database, "carcanhol">(
     NEXT_PUBLIC_SUPABASE_URL,
     NEXT_SUPABASE_ANON_KEY,
     {
       db: {
-        schema: "carcanhol",
+        schema: SUPABASE_SCHEMA as "carcanhol",
       },
       cookieOptions: authCookieOptions,
       cookies: {

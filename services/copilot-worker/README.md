@@ -1,13 +1,14 @@
 # GitHub Copilot validation worker
 
-Serviço Node.js isolado que executa apenas duas operações:
+Serviço Node.js isolado que expõe apenas duas operações HTTP:
 
 - `GET /health` faz `PING` e um `SET NX PX` efémero no replay store, devolvendo
   `200 {"status":"ok"}` ou `503 {"status":"unavailable"}` sem versão ou
   detalhes internos;
 - `POST /v1/copilot/validate` autentica um pedido HMAC e usa
-  `@github/copilot-sdk@1.0.14` (Copilot CLI 1.0.85) para `start()` + sessão efémera +
-  `session.rpc.model.list({})` + cleanup + `stop()`.
+  `@github/copilot-sdk@1.0.14` (Copilot CLI 1.0.85) para `start()` + sessão
+  efémera + `session.rpc.model.list({})` +
+  `client.rpc.account.getQuota({ gitHubToken })` + cleanup + `stop()`.
 
 Não aceita prompts, tools ou pedidos de browser. O runtime usa
 `mode: "empty"`, `useLoggedInUser: false`, log level `none` e um diretório
@@ -17,10 +18,11 @@ store; `denyAllPermissions` rejeita qualquer permission request inesperada.
 
 `auth.getStatus` não é usado como precondição: pode continuar `false` antes de
 o runtime consumir o token. Depois de `client.start()`, o adapter passa
-`gitHubToken` exclusivamente a `createSession`, omite `model`, chama a API
-pública tipada `session.rpc.model.list({})` e devolve `result.list`. Esta RPC
-usa o auth/integration context da sessão e é a validação autoritativa da
-identidade, entitlement, política e modelos. Em `finally`, o worker executa
+`gitHubToken` apenas às duas operações oficiais que o necessitam:
+`createSession` para `session.rpc.model.list({})` e `account.getQuota` para a
+quota da mesma conta. A primeira RPC usa o auth/integration context da sessão e
+é a validação autoritativa da identidade, entitlement, política e modelos. Em
+`finally`, o worker executa
 `session.disconnect()` + `client.deleteSession(sessionId)`; `client.stop()` e a
 remoção do diretório temporário permanecem como cleanup final. O SDK 1.0.14 não tipa uma
 categoria de erro específica para `models.list`; quando `ResponseError.data`
@@ -29,6 +31,28 @@ categoria só é classificado como `invalid_token` quando contém a combinação
 conhecida `code=-32603` + `Not authenticated`, ou a falha explícita de
 autenticação da sessão com `401 Unauthorized`; mensagens remotas em bruto não
 são devolvidas nem registadas.
+
+`account.getQuota` é uma API oficial mas experimental do SDK pinned. O worker
+consome apenas `quotaSnapshots.premium_interactions`, valida todos os campos e
+devolve uma allowlist local denominada `premium_interactions`. Os valores são
+preservados como unidades decimais do fornecedor: não existe divisão por 1 000.
+Isto é deliberadamente neutro porque o tipo público pinned não expõe
+`tokenBasedBilling`, usado pelo GitHub para escolher a designação específica do
+plano. A aplicação apresenta a métrica apenas como “Unidades de utilização”.
+`remainingPercentage` é percentagem restante. Um `resetDate` só é transmitido
+quando aponta para o futuro: o schema raw distingue
+`timestamp_utc` de `quota_reset_at`, mas o teste E2E pinned mostra o primeiro a
+ser mapeado para `resetDate`. Entitlements ilimitados não incluem
+total/restante/percentagem finitos; quotas ausentes, malformadas ou
+indisponíveis devolvem apenas um código categórico fixo. Esta falha nunca
+transforma um catálogo válido numa falha de credencial. O BFF pode preservar o
+último snapshot como stale, sem persistir raw errors, bodies, headers ou token.
+
+Embora os generated typings descrevam `CopilotUserResponse` e os seus campos
+raw, o surface público request-bound só devolve `AccountQuotaSnapshot`, que não
+os contém. `session.gitHubAuth.getStatus` também não inclui unidade ou próximo
+reset. O worker não chama métodos internos sem typing, não lê respostas raw e
+não usa auth global que possa devolver credenciais.
 
 Existe um único probe de diagnóstico para a combinação exata
 `code=-32603` + `SDK session authentication failed: network fetch failed:
@@ -119,8 +143,9 @@ e `timeout` aceitam apenas a variante de transporte compatível com o respetivo
 código.
 
 O token chega apenas no body HTTPS assinado e é entregue ao SDK em memória
-como `SessionConfig.gitHubToken`; nunca é usado em URL, log, erro, ficheiro ou
-telemetria da aplicação. O ambiente do child process é uma allowlist que
+como `SessionConfig.gitHubToken` e `AccountGetQuotaRequest.gitHubToken`; nunca
+é usado em URL, log, erro, ficheiro ou telemetria da aplicação. O ambiente do
+child process é uma allowlist que
 contém apenas os diretórios `HOME`/`TMP*` isolados, `PATH` quando definido e
 `SystemRoot` apenas em Windows. Variáveis `HTTP_PROXY`, `HTTPS_PROXY`,
 `NO_PROXY`, `NODE_EXTRA_CA_CERTS` e `SSL_CERT_*` não são herdadas pelo runtime

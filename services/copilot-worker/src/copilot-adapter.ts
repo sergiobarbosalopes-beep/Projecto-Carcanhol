@@ -6,7 +6,18 @@ import {
   type PermissionHandler,
   type SessionConfig,
 } from "@github/copilot-sdk";
+import {
+  copilotPremiumInteractionsQuotaSchema,
+  type CopilotPremiumInteractionsQuota,
+} from "./contract";
 import type { CopilotRuntimeClient, CopilotRuntimeFactory } from "./runtime";
+
+type AccountGetQuotaResult = Awaited<
+  ReturnType<CopilotClient["rpc"]["account"]["getQuota"]>
+>;
+type AccountQuotaSnapshot = NonNullable<
+  AccountGetQuotaResult["quotaSnapshots"][string]
+>;
 
 export const denyAllPermissions: PermissionHandler = () => ({
   kind: "reject",
@@ -79,13 +90,24 @@ class CopilotSdkRuntime implements CopilotRuntimeClient {
   ) {}
 
   async listModels(signal: AbortSignal) {
+    return listModelsWithSession(
+      this.client,
+      this.token,
+      this.sessionId,
+      signal
+    );
+  }
+
+  async getPremiumInteractionsQuota(signal: AbortSignal) {
     try {
-      return await listModelsWithSession(
-        this.client,
-        this.token,
-        this.sessionId,
-        signal
-      );
+      signal.throwIfAborted();
+      const result = await this.client.rpc.account.getQuota({
+        gitHubToken: this.token,
+      });
+      signal.throwIfAborted();
+      return sanitizePremiumInteractionsQuota(result);
+    } catch {
+      return unavailableQuota("provider_quota_unavailable");
     } finally {
       this.token = "";
     }
@@ -107,6 +129,112 @@ class CopilotSdkRuntime implements CopilotRuntimeClient {
       await removeTemporaryState(this.baseDirectory);
     }
   }
+}
+
+export function sanitizePremiumInteractionsQuota(
+  result: AccountGetQuotaResult
+): CopilotPremiumInteractionsQuota {
+  const snapshot = result.quotaSnapshots.premium_interactions;
+
+  if (!snapshot) {
+    return unavailableQuota("provider_quota_not_available");
+  }
+
+  return normalizeQuotaSnapshot(snapshot);
+}
+
+function normalizeQuotaSnapshot(
+  snapshot: AccountQuotaSnapshot
+): CopilotPremiumInteractionsQuota {
+  const {
+    entitlementRequests,
+    isUnlimitedEntitlement,
+    overage,
+    overageAllowedWithExhaustedQuota,
+    remainingPercentage,
+    resetDate,
+    usageAllowedWithExhaustedQuota,
+    usedRequests,
+  } = snapshot;
+
+  if (
+    !isValidProviderUnits(usedRequests) ||
+    usedRequests < 0 ||
+    !isValidProviderUnits(overage) ||
+    overage < 0 ||
+    !Number.isFinite(remainingPercentage) ||
+    remainingPercentage < 0 ||
+    remainingPercentage > 100 ||
+    (resetDate !== undefined && !Number.isFinite(Date.parse(resetDate)))
+  ) {
+    return unavailableQuota("malformed_provider_quota");
+  }
+
+  if (isUnlimitedEntitlement) {
+    return parseNormalizedQuota({
+      status: "available",
+      metric: "premium_interactions",
+      isUnlimited: true,
+      usedUnits: usedRequests,
+      overageUnits: overage,
+      usageAllowedAfterLimit: usageAllowedWithExhaustedQuota,
+      overageAllowed: overageAllowedWithExhaustedQuota,
+      ...(isFutureIsoDate(resetDate) ? { resetAt: resetDate } : {}),
+    });
+  }
+
+  if (!isValidProviderUnits(entitlementRequests) || entitlementRequests < 0) {
+    return unavailableQuota("malformed_provider_quota");
+  }
+
+  return parseNormalizedQuota({
+    status: "available",
+    metric: "premium_interactions",
+    isUnlimited: false,
+    usedUnits: usedRequests,
+    includedUnits: entitlementRequests,
+    remainingUnits: Math.max(0, entitlementRequests - usedRequests),
+    remainingPercentage,
+    overageUnits: overage,
+    usageAllowedAfterLimit: usageAllowedWithExhaustedQuota,
+    overageAllowed: overageAllowedWithExhaustedQuota,
+    ...(isFutureIsoDate(resetDate) ? { resetAt: resetDate } : {}),
+  });
+}
+
+function parseNormalizedQuota(
+  value: CopilotPremiumInteractionsQuota
+): CopilotPremiumInteractionsQuota {
+  const parsed = copilotPremiumInteractionsQuotaSchema.safeParse(value);
+  return parsed.success
+    ? parsed.data
+    : unavailableQuota("malformed_provider_quota");
+}
+
+function unavailableQuota(
+  errorCode:
+    | "provider_quota_unavailable"
+    | "provider_quota_not_available"
+    | "malformed_provider_quota"
+): CopilotPremiumInteractionsQuota {
+  return {
+    status: "unavailable",
+    metric: "premium_interactions",
+    errorCode,
+  };
+}
+
+function isValidProviderUnits(value: number) {
+  return Number.isFinite(value) && value <= 1_000_000_000;
+}
+
+function isFutureIsoDate(value: string | undefined) {
+  if (!value) {
+    return false;
+  }
+
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && timestamp > Date.now();
 }
 
 export function createValidationSessionConfig(
