@@ -43,6 +43,11 @@ diagnósticos usam mensagens fixas e não incluem status, body ou headers.
 Timeout, rate limit, erro de rede e `5xx` permanecem falhas transitórias.
 Nenhum outro erro ativa este probe.
 
+Os outcomes `200`, `403` e status inconclusivo usam o shape literal
+`copilot_validation_probe_unknown` com apenas `requestId`, `code` e `message`.
+Não são inseridos em `error.stringCodes`: essa lista mantém a deteção
+anti-segredo para códigos remotos não confiáveis.
+
 Se a classificação final continuar `unknown`, o worker emite uma única linha
 JSON interna e inclui o mesmo objeto já sanitizado no campo opcional
 `diagnostic` da resposta de validação:
@@ -106,11 +111,12 @@ environment.
 O BFF preserva este campo exclusivamente na resposta autenticada
 `POST /api/admin/llm-accounts/:id/validate` do proprietário. O campo não é
 persistido, não aparece em `GET /api/admin/llm-accounts` e não é renderizado
-por omissão na UI. Apenas `unknown` aceita o diagnóstico genérico e apenas
-`unavailable` aceita o diagnóstico estrito do probe; os restantes códigos
-rejeitam contratualmente o campo no protocolo worker. No BFF, `unknown`,
-`unavailable` e `timeout` aceitam apenas a variante de transporte compatível
-com o respetivo código.
+por omissão na UI. `unknown` aceita apenas o diagnóstico genérico redigido ou
+o diagnóstico literal do probe; `unavailable` aceita apenas o diagnóstico
+transitório do probe ou o erro interno por fase. Os restantes códigos rejeitam
+contratualmente o campo no protocolo worker. No BFF, `unknown`, `unavailable`
+e `timeout` aceitam apenas a variante de transporte compatível com o respetivo
+código.
 
 O token chega apenas no body HTTPS assinado e é entregue ao SDK em memória
 como `SessionConfig.gitHubToken`; nunca é usado em URL, log, erro, ficheiro ou

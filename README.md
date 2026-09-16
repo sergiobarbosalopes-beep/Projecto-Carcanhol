@@ -201,7 +201,8 @@ a autenticação da sessão, o worker faz um probe bounded à URL fixa
 resposta não são lidos. Um `200` não afirma entitlement Copilot e mantém o
 resultado `unknown`; `401` identifica credencial inválida; `403` permanece
 inconclusivo. Outcomes inconclusivos usam apenas códigos e mensagens locais
-fixos, sem transportar status, body ou headers.
+fixos num shape próprio, sem transportar status, body ou headers e sem
+afrouxar a deteção anti-segredo dos erros remotos.
 
 Se o próprio probe falhar, a revalidação mantém `unavailable` e pode devolver
 ao proprietário apenas uma categoria fixa de rede, rate limit ou

@@ -289,14 +289,13 @@ test("uses the fixed credential probe only for the exact session builder error",
 
   assert.equal(result.ok, false);
   assert.equal(result.code, "unknown");
-  assert.deepEqual(result.diagnostic.error.stringCodes, [
-    "GITHUB_CREDENTIAL_PROBE_SUCCEEDED",
-  ]);
-  assert.deepEqual(result.diagnostic.error.statuses, []);
-  assert.equal(
-    result.diagnostic.error.message,
-    "github credential probe succeeded; Copilot runtime transport failed"
-  );
+  assert.deepEqual(result.diagnostic, {
+    event: "copilot_validation_probe_unknown",
+    requestId,
+    code: "GITHUB_CREDENTIAL_PROBE_SUCCEEDED",
+    message:
+      "github credential probe succeeded; Copilot runtime transport failed",
+  });
   assert.equal(JSON.stringify(result).includes(token), false);
   assert.equal(probeCalls, 1);
   assert.equal(closed, true);
@@ -369,14 +368,13 @@ test("uses the fixed credential probe only for the exact session builder error",
 
   assert.equal(wrappedResult.ok, false);
   assert.equal(wrappedResult.code, "unknown");
-  assert.deepEqual(wrappedResult.diagnostic.error.stringCodes, [
-    "GITHUB_CREDENTIAL_PROBE_FORBIDDEN",
-  ]);
-  assert.deepEqual(wrappedResult.diagnostic.error.statuses, []);
-  assert.equal(
-    wrappedResult.diagnostic.error.message,
-    "github credential probe forbidden; Copilot runtime transport failed"
-  );
+  assert.deepEqual(wrappedResult.diagnostic, {
+    event: "copilot_validation_probe_unknown",
+    requestId,
+    code: "GITHUB_CREDENTIAL_PROBE_FORBIDDEN",
+    message:
+      "github credential probe forbidden; Copilot runtime transport failed",
+  });
   assert.equal(probeCalls, 2);
 });
 
@@ -389,9 +387,13 @@ test("maps credential probe outcomes without inferring entitlement", async () =>
     {
       probeResult: { outcome: "forbidden" },
       expectedCode: "unknown",
-      expectedDiagnosticCode: "GITHUB_CREDENTIAL_PROBE_FORBIDDEN",
-      expectedMessage:
-        "github credential probe forbidden; Copilot runtime transport failed",
+      expectedProbeUnknownDiagnostic: {
+        event: "copilot_validation_probe_unknown",
+        requestId,
+        code: "GITHUB_CREDENTIAL_PROBE_FORBIDDEN",
+        message:
+          "github credential probe forbidden; Copilot runtime transport failed",
+      },
     },
     {
       probeResult: { outcome: "timeout" },
@@ -435,17 +437,20 @@ test("maps credential probe outcomes without inferring entitlement", async () =>
     {
       probeResult: { outcome: "unknown" },
       expectedCode: "unknown",
-      expectedDiagnosticCode: "GITHUB_CREDENTIAL_PROBE_UNEXPECTED_STATUS",
-      expectedMessage:
-        "github credential probe returned an unexpected status; Copilot runtime transport failed",
+      expectedProbeUnknownDiagnostic: {
+        event: "copilot_validation_probe_unknown",
+        requestId,
+        code: "GITHUB_CREDENTIAL_PROBE_UNEXPECTED_STATUS",
+        message:
+          "github credential probe returned an unexpected status; Copilot runtime transport failed",
+      },
     },
   ];
 
   for (const {
     probeResult,
     expectedCode,
-    expectedDiagnosticCode,
-    expectedMessage,
+    expectedProbeUnknownDiagnostic,
     expectedUnavailableDiagnostic,
   } of cases) {
     let emittedDiagnostic;
@@ -475,14 +480,9 @@ test("maps credential probe outcomes without inferring entitlement", async () =>
       assert.equal("status" in result.diagnostic, false);
       assert.equal("body" in result.diagnostic, false);
       assert.equal("headers" in result.diagnostic, false);
-    } else if (expectedDiagnosticCode) {
-      assert.equal(
-        result.diagnostic?.error.stringCodes.includes(expectedDiagnosticCode),
-        true
-      );
-      assert.deepEqual(result.diagnostic?.error.statuses, []);
-      assert.equal(result.diagnostic?.error.message, expectedMessage);
-      assert.deepEqual(emittedDiagnostic, result.diagnostic);
+    } else if (expectedProbeUnknownDiagnostic) {
+      assert.deepEqual(result.diagnostic, expectedProbeUnknownDiagnostic);
+      assert.deepEqual(emittedDiagnostic, expectedProbeUnknownDiagnostic);
     } else {
       assert.equal(result.diagnostic, undefined);
       assert.equal(emittedDiagnostic, undefined);

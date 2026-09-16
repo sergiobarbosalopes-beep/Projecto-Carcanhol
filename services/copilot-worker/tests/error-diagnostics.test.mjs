@@ -314,6 +314,76 @@ test("allows generic diagnostics only on correlated unknown responses", () => {
   }
 });
 
+test("uses a literal schema for fixed probe outcomes", () => {
+  const cases = [
+    {
+      code: "GITHUB_CREDENTIAL_PROBE_SUCCEEDED",
+      message:
+        "github credential probe succeeded; Copilot runtime transport failed",
+    },
+    {
+      code: "GITHUB_CREDENTIAL_PROBE_FORBIDDEN",
+      message:
+        "github credential probe forbidden; Copilot runtime transport failed",
+    },
+    {
+      code: "GITHUB_CREDENTIAL_PROBE_UNEXPECTED_STATUS",
+      message:
+        "github credential probe returned an unexpected status; Copilot runtime transport failed",
+    },
+  ];
+
+  for (const { code, message } of cases) {
+    const diagnostic = {
+      event: "copilot_validation_probe_unknown",
+      requestId,
+      code,
+      message,
+    };
+
+    assert.equal(
+      copilotValidationResponseSchema.safeParse({
+        ok: false,
+        requestId,
+        code: "unknown",
+        diagnostic,
+      }).success,
+      true
+    );
+    assert.equal(
+      copilotValidationResponseSchema.safeParse({
+        ok: false,
+        requestId,
+        code: "unavailable",
+        diagnostic,
+      }).success,
+      false
+    );
+  }
+
+  const genericProbeDiagnostic = createSafeUnknownCopilotErrorDiagnostic(
+    requestId,
+    {
+      name: "ResponseError",
+      code: -32603,
+      message: "Unexpected internal response",
+    }
+  );
+  genericProbeDiagnostic.error.stringCodes = [
+    "GITHUB_CREDENTIAL_PROBE_SUCCEEDED",
+  ];
+
+  assert.equal(
+    copilotValidationResponseSchema.safeParse({
+      ok: false,
+      requestId,
+      code: "unknown",
+      diagnostic: genericProbeDiagnostic,
+    }).success,
+    false
+  );
+});
+
 test("allows only fixed probe diagnostics on unavailable responses", () => {
   const networkDiagnostic = {
     event: "copilot_validation_probe_unavailable",

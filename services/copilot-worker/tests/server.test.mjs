@@ -6,6 +6,7 @@ import {
   COPILOT_VALIDATION_PATH,
 } from "../dist/contract.js";
 import { createSignedWorkerHeaders } from "../dist/request-auth.js";
+import { validateCopilotCredential } from "../dist/runtime.js";
 import { createCopilotWorkerServer } from "../dist/server.js";
 
 const secret = Buffer.alloc(32, 23);
@@ -306,6 +307,175 @@ test("reports fixed internal diagnostics after authenticated validation starts",
       });
       assert.deepEqual(diagnostics, [expectedDiagnostic]);
       assert.equal(responseBody.includes(token), false);
+    } finally {
+      server.close();
+      await once(server, "close");
+    }
+  }
+});
+
+test("accepts the exact builder-error probe result through the server schema", async () => {
+  const cases = [
+    {
+      requestId: "50f962dd-c7ae-4231-b9a5-69a99ba81682",
+      probeResult: { outcome: "valid" },
+      code: "unknown",
+      diagnostic: {
+        event: "copilot_validation_probe_unknown",
+        code: "GITHUB_CREDENTIAL_PROBE_SUCCEEDED",
+        message:
+          "github credential probe succeeded; Copilot runtime transport failed",
+      },
+    },
+    {
+      requestId: "ca23b302-d255-46c8-b42c-b97ec0cc348b",
+      probeResult: { outcome: "forbidden" },
+      code: "unknown",
+      diagnostic: {
+        event: "copilot_validation_probe_unknown",
+        code: "GITHUB_CREDENTIAL_PROBE_FORBIDDEN",
+        message:
+          "github credential probe forbidden; Copilot runtime transport failed",
+      },
+    },
+    {
+      requestId: "16cf33f1-21a9-48f5-9aa4-4fd61623dc86",
+      probeResult: { outcome: "unknown" },
+      code: "unknown",
+      diagnostic: {
+        event: "copilot_validation_probe_unknown",
+        code: "GITHUB_CREDENTIAL_PROBE_UNEXPECTED_STATUS",
+        message:
+          "github credential probe returned an unexpected status; Copilot runtime transport failed",
+      },
+    },
+    {
+      requestId: "fb1d4ae1-17bf-41ec-b3d9-fe927c6b64a8",
+      probeResult: {
+        outcome: "unavailable",
+        category: "network_error",
+        causeCode: "SELF_SIGNED_CERT_IN_CHAIN",
+      },
+      code: "unavailable",
+      diagnostic: {
+        event: "copilot_validation_probe_unavailable",
+        code: "GITHUB_CREDENTIAL_PROBE_NETWORK_ERROR",
+        message: "github credential probe could not reach GitHub",
+        causeCode: "SELF_SIGNED_CERT_IN_CHAIN",
+      },
+    },
+    {
+      requestId: "cc416a0f-8e31-49e8-b72a-93ad3fed117a",
+      probeResult: {
+        outcome: "unavailable",
+        category: "rate_limited",
+      },
+      code: "unavailable",
+      diagnostic: {
+        event: "copilot_validation_probe_unavailable",
+        code: "GITHUB_CREDENTIAL_PROBE_RATE_LIMITED",
+        message: "github credential probe was rate limited",
+      },
+    },
+    {
+      requestId: "a81dd629-2909-4d77-8395-763a1f21b2db",
+      probeResult: {
+        outcome: "unavailable",
+        category: "github_unavailable",
+      },
+      code: "unavailable",
+      diagnostic: {
+        event: "copilot_validation_probe_unavailable",
+        code: "GITHUB_CREDENTIAL_PROBE_GITHUB_UNAVAILABLE",
+        message: "github credential probe found GitHub unavailable",
+      },
+    },
+    {
+      requestId: "536329aa-4d9c-4343-b24b-9f3a43fcfc4f",
+      probeResult: { outcome: "invalid_token" },
+      code: "invalid_token",
+    },
+    {
+      requestId: "ece1470d-dcf2-4d76-9701-97b5432de4bb",
+      probeResult: { outcome: "timeout" },
+      code: "timeout",
+    },
+  ];
+
+  for (const { requestId, probeResult, code, diagnostic } of cases) {
+    const emittedDiagnostics = [];
+    const server = createCopilotWorkerServer({
+      hmacSecret: secret,
+      validate: (
+        { token: receivedToken, requestId: receivedRequestId },
+        signal
+      ) =>
+        validateCopilotCredential({
+          token: receivedToken,
+          requestId: receivedRequestId,
+          timeoutMs: 100,
+          signal,
+          createRuntime: async () => ({
+            async listModels() {
+              throw {
+                name: "ResponseError",
+                code: -32603,
+                message:
+                  "SDK session authentication failed: network fetch failed: request failed: builder error",
+              };
+            },
+            async close() {},
+          }),
+          async probeCredential() {
+            return probeResult;
+          },
+          onDiagnostic(value) {
+            emittedDiagnostics.push(value);
+          },
+        }),
+      onDiagnostic(value) {
+        emittedDiagnostics.push(value);
+      },
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+
+    try {
+      const address = server.address();
+      assert.equal(typeof address, "object");
+      const body = JSON.stringify({ requestId, token });
+      const headers = createSignedWorkerHeaders({
+        body,
+        method: "POST",
+        path: COPILOT_VALIDATION_PATH,
+        requestId,
+        secret,
+      });
+      const response = await fetch(
+        `http://127.0.0.1:${address.port}${COPILOT_VALIDATION_PATH}`,
+        {
+          method: "POST",
+          body,
+          headers: { ...headers, "Content-Type": "application/json" },
+        }
+      );
+      const payload = await response.json();
+      const expectedDiagnostic = diagnostic
+        ? { requestId, ...diagnostic }
+        : undefined;
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(payload, {
+        ok: false,
+        requestId,
+        code,
+        ...(expectedDiagnostic ? { diagnostic: expectedDiagnostic } : {}),
+      });
+      assert.deepEqual(
+        emittedDiagnostics,
+        expectedDiagnostic ? [expectedDiagnostic] : []
+      );
+      assert.equal(JSON.stringify(payload).includes(token), false);
     } finally {
       server.close();
       await once(server, "close");

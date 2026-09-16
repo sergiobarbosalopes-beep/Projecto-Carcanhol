@@ -128,6 +128,48 @@ export type SafeCopilotUnavailableDiagnostic = z.infer<
   typeof safeCopilotUnavailableDiagnosticSchema
 >;
 
+const probeUnknownDiagnosticBase = {
+  event: z.literal("copilot_validation_probe_unknown"),
+  requestId: z.string().uuid(),
+};
+
+export const safeCopilotProbeUnknownDiagnosticSchema = z.discriminatedUnion(
+  "code",
+  [
+    z
+      .object({
+        ...probeUnknownDiagnosticBase,
+        code: z.literal("GITHUB_CREDENTIAL_PROBE_SUCCEEDED"),
+        message: z.literal(
+          "github credential probe succeeded; Copilot runtime transport failed"
+        ),
+      })
+      .strict(),
+    z
+      .object({
+        ...probeUnknownDiagnosticBase,
+        code: z.literal("GITHUB_CREDENTIAL_PROBE_FORBIDDEN"),
+        message: z.literal(
+          "github credential probe forbidden; Copilot runtime transport failed"
+        ),
+      })
+      .strict(),
+    z
+      .object({
+        ...probeUnknownDiagnosticBase,
+        code: z.literal("GITHUB_CREDENTIAL_PROBE_UNEXPECTED_STATUS"),
+        message: z.literal(
+          "github credential probe returned an unexpected status; Copilot runtime transport failed"
+        ),
+      })
+      .strict(),
+  ]
+);
+
+export type SafeCopilotProbeUnknownDiagnostic = z.infer<
+  typeof safeCopilotProbeUnknownDiagnosticSchema
+>;
+
 export const copilotWorkerRequestPhases = [
   "receiving_body",
   "authenticating",
@@ -157,6 +199,7 @@ export type SafeCopilotWorkerInternalDiagnostic = z.infer<
 export type SafeCopilotValidationDiagnostic =
   | SafeUnknownCopilotErrorDiagnostic
   | SafeCopilotUnavailableDiagnostic
+  | SafeCopilotProbeUnknownDiagnostic
   | SafeCopilotWorkerInternalDiagnostic;
 
 export const COPILOT_WORKER_TRANSPORT_DIAGNOSTICS = {
@@ -408,7 +451,12 @@ const unknownFailureSchema = z
     ok: z.literal(false),
     requestId: z.string().uuid(),
     code: z.literal("unknown"),
-    diagnostic: safeUnknownCopilotErrorDiagnosticSchema.optional(),
+    diagnostic: z
+      .union([
+        safeUnknownCopilotErrorDiagnosticSchema,
+        safeCopilotProbeUnknownDiagnosticSchema,
+      ])
+      .optional(),
   })
   .strict()
   .superRefine((value, context) => {

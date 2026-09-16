@@ -2,6 +2,7 @@ import {
   COPILOT_WORKER_MAX_MODELS,
   copilotModelSchema,
   type CopilotModel,
+  type SafeCopilotProbeUnknownDiagnostic,
   type SafeCopilotUnavailableDiagnostic,
   type SafeCopilotValidationDiagnostic,
   type SafeUnknownCopilotErrorDiagnostic,
@@ -109,7 +110,10 @@ export async function validateCopilotCredential({
   } catch (error) {
     const evidence = collectCopilotErrorEvidence(error);
     let code = classifyCopilotError(error, evidence);
-    let unknownDiagnostic: SafeUnknownCopilotErrorDiagnostic | undefined;
+    let unknownDiagnostic:
+      | SafeUnknownCopilotErrorDiagnostic
+      | SafeCopilotProbeUnknownDiagnostic
+      | undefined;
     let unavailableDiagnostic: SafeCopilotUnavailableDiagnostic | undefined;
 
     if (code === "unknown" && isSessionAuthenticationBuilderError(evidence)) {
@@ -118,13 +122,14 @@ export async function validateCopilotCredential({
           probeCredential(token, controller.signal),
           timedOut,
         ]);
-        const resolution = applyCredentialProbeResult(
-          requestId,
-          probeResult,
-          evidence
-        );
+        const resolution = applyCredentialProbeResult(requestId, probeResult);
         code = resolution.code;
-        unavailableDiagnostic = resolution.diagnostic;
+
+        if (resolution.code === "unknown") {
+          unknownDiagnostic = resolution.diagnostic;
+        } else if (resolution.code === "unavailable") {
+          unavailableDiagnostic = resolution.diagnostic;
+        }
       } catch {
         code = controller.signal.aborted ? "timeout" : "unavailable";
         unavailableDiagnostic = controller.signal.aborted
@@ -136,7 +141,7 @@ export async function validateCopilotCredential({
       }
     }
 
-    if (code === "unknown") {
+    if (code === "unknown" && !unknownDiagnostic) {
       try {
         unknownDiagnostic = createSafeUnknownCopilotErrorDiagnostic(
           requestId,
@@ -346,8 +351,12 @@ function isSessionAuthenticationBuilderError(evidence: CopilotErrorEvidence) {
 
 type CredentialProbeResolution =
   | {
-      code: Exclude<CopilotValidationErrorCode, "unavailable">;
+      code: Exclude<CopilotValidationErrorCode, "unknown" | "unavailable">;
       diagnostic?: never;
+    }
+  | {
+      code: "unknown";
+      diagnostic: SafeCopilotProbeUnknownDiagnostic;
     }
   | {
       code: "unavailable";
@@ -356,8 +365,7 @@ type CredentialProbeResolution =
 
 function applyCredentialProbeResult(
   requestId: string,
-  result: Awaited<ReturnType<GitHubCredentialProbe>>,
-  evidence: CopilotErrorEvidence
+  result: Awaited<ReturnType<GitHubCredentialProbe>>
 ): CredentialProbeResolution {
   if (result.outcome === "invalid_token") {
     return { code: "invalid_token" };
@@ -374,24 +382,45 @@ function applyCredentialProbeResult(
     };
   }
 
-  evidence.stringCodes.clear();
-  evidence.statuses.clear();
+  return {
+    code: "unknown",
+    diagnostic: createProbeUnknownDiagnostic(requestId, result.outcome),
+  };
+}
 
-  if (result.outcome === "valid") {
-    evidence.stringCodes.add("GITHUB_CREDENTIAL_PROBE_SUCCEEDED");
-    evidence.primaryMessage =
-      "github credential probe succeeded; Copilot runtime transport failed";
-  } else if (result.outcome === "forbidden") {
-    evidence.stringCodes.add("GITHUB_CREDENTIAL_PROBE_FORBIDDEN");
-    evidence.primaryMessage =
-      "github credential probe forbidden; Copilot runtime transport failed";
-  } else {
-    evidence.stringCodes.add("GITHUB_CREDENTIAL_PROBE_UNEXPECTED_STATUS");
-    evidence.primaryMessage =
-      "github credential probe returned an unexpected status; Copilot runtime transport failed";
+function createProbeUnknownDiagnostic(
+  requestId: string,
+  outcome: "valid" | "forbidden" | "unknown"
+): SafeCopilotProbeUnknownDiagnostic {
+  const base = {
+    event: "copilot_validation_probe_unknown" as const,
+    requestId,
+  };
+
+  if (outcome === "valid") {
+    return {
+      ...base,
+      code: "GITHUB_CREDENTIAL_PROBE_SUCCEEDED",
+      message:
+        "github credential probe succeeded; Copilot runtime transport failed",
+    };
   }
 
-  return { code: "unknown" };
+  if (outcome === "forbidden") {
+    return {
+      ...base,
+      code: "GITHUB_CREDENTIAL_PROBE_FORBIDDEN",
+      message:
+        "github credential probe forbidden; Copilot runtime transport failed",
+    };
+  }
+
+  return {
+    ...base,
+    code: "GITHUB_CREDENTIAL_PROBE_UNEXPECTED_STATUS",
+    message:
+      "github credential probe returned an unexpected status; Copilot runtime transport failed",
+  };
 }
 
 function createProbeUnavailableDiagnostic(

@@ -321,6 +321,11 @@ fixos e não incluem o status. Timeout/rede/`5xx` são transitórios. Outros err
 nunca acionam o probe. Não se alterou a herança de proxy/CA do child runtime
 sem evidência adicional.
 
+Os outcomes `200`, `403` e status inconclusivo usam um contrato literal
+separado (`copilot_validation_probe_unknown`, `requestId`, `code`, `message`).
+Não reutilizam `error.stringCodes`, cuja regra anti-segredo continua aplicada
+apenas a evidência remota não confiável.
+
 Para `unknown`, o worker cria um diagnóstico efémero com shape fechado
 (`event`, `requestId`, `error.constructor/name/stringCodes/numericCodes/statuses/message`).
 Antes do fallback textual, privilegia `ResponseError.data.code` e statuses
