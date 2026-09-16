@@ -382,6 +382,57 @@ test("allows only fixed probe diagnostics on unavailable responses", () => {
   );
 });
 
+test("allows only fixed internal diagnostics on unavailable worker responses", () => {
+  const diagnostic = {
+    event: "copilot_worker_internal_error",
+    requestId,
+    code: "WORKER_INTERNAL_FAILURE",
+    message: "copilot worker failed internally",
+    phase: "validating_response",
+  };
+
+  assert.equal(
+    copilotValidationResponseSchema.safeParse({
+      ok: false,
+      requestId,
+      code: "unavailable",
+      diagnostic,
+    }).success,
+    true
+  );
+
+  for (const invalidDiagnostic of [
+    { ...diagnostic, phase: "database" },
+    { ...diagnostic, status: 500 },
+    { ...diagnostic, raw: pat },
+    { ...diagnostic, message: `failed for ${pat}` },
+    {
+      ...diagnostic,
+      requestId: "3bebcccd-5254-40f8-809f-3a14579dba46",
+    },
+  ]) {
+    assert.equal(
+      copilotValidationResponseSchema.safeParse({
+        ok: false,
+        requestId,
+        code: "unavailable",
+        diagnostic: invalidDiagnostic,
+      }).success,
+      false
+    );
+  }
+
+  assert.equal(
+    copilotValidationResponseSchema.safeParse({
+      ok: false,
+      requestId,
+      code: "unknown",
+      diagnostic,
+    }).success,
+    false
+  );
+});
+
 test("allows only code-compatible fixed BFF transport diagnostics", () => {
   const networkDiagnostic = {
     event: "copilot_worker_transport_error",

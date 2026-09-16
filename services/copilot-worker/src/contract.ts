@@ -128,8 +128,36 @@ export type SafeCopilotUnavailableDiagnostic = z.infer<
   typeof safeCopilotUnavailableDiagnosticSchema
 >;
 
+export const copilotWorkerRequestPhases = [
+  "receiving_body",
+  "authenticating",
+  "parsing_request",
+  "validating",
+  "validating_response",
+  "writing_response",
+] as const;
+
+export type CopilotWorkerRequestPhase =
+  (typeof copilotWorkerRequestPhases)[number];
+
+export const safeCopilotWorkerInternalDiagnosticSchema = z
+  .object({
+    event: z.literal("copilot_worker_internal_error"),
+    requestId: z.string().uuid(),
+    code: z.literal("WORKER_INTERNAL_FAILURE"),
+    message: z.literal("copilot worker failed internally"),
+    phase: z.enum(copilotWorkerRequestPhases),
+  })
+  .strict();
+
+export type SafeCopilotWorkerInternalDiagnostic = z.infer<
+  typeof safeCopilotWorkerInternalDiagnosticSchema
+>;
+
 export type SafeCopilotValidationDiagnostic =
-  SafeUnknownCopilotErrorDiagnostic | SafeCopilotUnavailableDiagnostic;
+  | SafeUnknownCopilotErrorDiagnostic
+  | SafeCopilotUnavailableDiagnostic
+  | SafeCopilotWorkerInternalDiagnostic;
 
 export const COPILOT_WORKER_TRANSPORT_DIAGNOSTICS = {
   authRejected: {
@@ -398,7 +426,12 @@ const unavailableFailureSchema = z
     ok: z.literal(false),
     requestId: z.string().uuid(),
     code: z.literal("unavailable"),
-    diagnostic: safeCopilotUnavailableDiagnosticSchema.optional(),
+    diagnostic: z
+      .union([
+        safeCopilotUnavailableDiagnosticSchema,
+        safeCopilotWorkerInternalDiagnosticSchema,
+      ])
+      .optional(),
   })
   .strict()
   .superRefine((value, context) => {

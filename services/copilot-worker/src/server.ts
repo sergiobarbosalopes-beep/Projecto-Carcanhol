@@ -12,6 +12,8 @@ import {
   copilotValidationResponseSchema,
   type CopilotValidationRequest,
   type CopilotValidationResponse,
+  type CopilotWorkerRequestPhase,
+  type SafeCopilotWorkerInternalDiagnostic,
 } from "./contract";
 import {
   ConcurrencyGate,
@@ -36,6 +38,8 @@ export type CopilotWorkerServerOptions = {
   healthTimeoutMs?: number;
   validationDeadlineMs?: number;
   replayStore?: ReplayStore;
+  onDiagnostic?: (diagnostic: SafeCopilotWorkerInternalDiagnostic) => void;
+  writeResponse?: typeof sendJson;
 };
 
 export function createCopilotWorkerServer(options: CopilotWorkerServerOptions) {
@@ -46,6 +50,7 @@ export function createCopilotWorkerServer(options: CopilotWorkerServerOptions) {
     options.maxConcurrency ?? 2,
     options.maxQueue ?? 8
   );
+  const writeResponse = options.writeResponse ?? sendJson;
 
   return createServer(async (request, response) => {
     response.setHeader("Cache-Control", "no-store");
@@ -58,9 +63,16 @@ export function createCopilotWorkerServer(options: CopilotWorkerServerOptions) {
         maxClockSkewMs,
         replayStore,
         gate,
+        writeResponse,
       });
     } catch {
-      sendJson(response, 500, { error: "Worker request failed." });
+      if (!response.destroyed) {
+        try {
+          writeResponse(response, 500, { error: "Worker request failed." });
+        } catch {
+          response.destroy();
+        }
+      }
     }
   });
 }
@@ -71,12 +83,16 @@ async function handleRequest(
   options: CopilotWorkerServerOptions & {
     replayStore: ReplayStore;
     gate: ConcurrencyGate;
+    writeResponse: typeof sendJson;
   }
 ) {
+  let phase: CopilotWorkerRequestPhase = "receiving_body";
   const url = new URL(request.url ?? "/", "http://worker.internal");
 
   if (request.headers.origin) {
-    sendJson(response, 403, { error: "Browser requests are not accepted." });
+    options.writeResponse(response, 403, {
+      error: "Browser requests are not accepted.",
+    });
     return;
   }
 
@@ -88,7 +104,7 @@ async function handleRequest(
     const ready = await options.replayStore
       .readiness(AbortSignal.timeout(options.healthTimeoutMs ?? 1_500))
       .catch(() => false);
-    sendJson(
+    options.writeResponse(
       response,
       ready ? 200 : 503,
       ready ? { status: "ok" } : { status: "unavailable" }
@@ -101,14 +117,16 @@ async function handleRequest(
     url.pathname !== COPILOT_VALIDATION_PATH ||
     url.search
   ) {
-    sendJson(response, 404, { error: "Not found." });
+    options.writeResponse(response, 404, { error: "Not found." });
     return;
   }
 
   const contentType = request.headers["content-type"]?.split(";")[0]?.trim();
 
   if (contentType !== "application/json") {
-    sendJson(response, 415, { error: "Unsupported media type." });
+    options.writeResponse(response, 415, {
+      error: "Unsupported media type.",
+    });
     return;
   }
 
@@ -118,7 +136,7 @@ async function handleRequest(
     Number.isFinite(declaredLength) &&
     declaredLength > COPILOT_WORKER_MAX_BODY_BYTES
   ) {
-    sendJson(response, 413, { error: "Payload too large." });
+    options.writeResponse(response, 413, { error: "Payload too large." });
     return;
   }
 
@@ -127,19 +145,24 @@ async function handleRequest(
   try {
     body = await readBody(request, COPILOT_WORKER_MAX_BODY_BYTES);
   } catch (error) {
-    sendJson(response, error instanceof PayloadTooLargeError ? 413 : 400, {
-      error: "Invalid request body.",
-    });
+    options.writeResponse(
+      response,
+      error instanceof PayloadTooLargeError ? 413 : 400,
+      {
+        error: "Invalid request body.",
+      }
+    );
     return;
   }
 
+  phase = "authenticating";
   const requestId = header(request, COPILOT_WORKER_HEADERS.requestId);
   const timestamp = header(request, COPILOT_WORKER_HEADERS.timestamp);
   const bodySha256 = header(request, COPILOT_WORKER_HEADERS.bodySha256);
   const signature = header(request, COPILOT_WORKER_HEADERS.signature);
 
   if (!requestId || !timestamp || !bodySha256 || !signature) {
-    sendJson(response, 401, { error: "Unauthorized." });
+    options.writeResponse(response, 401, { error: "Unauthorized." });
     return;
   }
 
@@ -182,62 +205,141 @@ async function handleRequest(
     );
 
     if (!authentication.ok) {
-      sendJson(response, 401, { error: "Unauthorized." });
+      options.writeResponse(response, 401, { error: "Unauthorized." });
       return;
     }
 
     authenticated = true;
+    phase = "parsing_request";
     let input: unknown;
 
     try {
       input = JSON.parse(body);
     } catch {
-      sendJson(response, 400, { error: "Invalid request body." });
+      options.writeResponse(response, 400, {
+        error: "Invalid request body.",
+      });
       return;
     }
 
     const parsed = copilotValidationRequestSchema.safeParse(input);
 
     if (!parsed.success || parsed.data.requestId !== authentication.requestId) {
-      sendJson(response, 400, { error: "Invalid request body." });
+      options.writeResponse(response, 400, {
+        error: "Invalid request body.",
+      });
       return;
     }
 
     const validatedRequest = parsed.data;
     parsedRequest = validatedRequest;
+    phase = "validating";
     const result = await options.gate.run(
       () => options.validate(validatedRequest, controller.signal),
       controller.signal
     );
     controller.signal.throwIfAborted();
+    phase = "validating_response";
     const validatedResult = copilotValidationResponseSchema.parse(result);
 
     if (!response.destroyed) {
-      sendJson(response, 200, validatedResult);
+      phase = "writing_response";
+      options.writeResponse(response, 200, validatedResult);
     }
   } catch (error) {
+    if (phase === "writing_response" && authenticated && parsedRequest) {
+      emitInternalDiagnostic(options, parsedRequest.requestId, phase);
+
+      if (!response.destroyed) {
+        response.destroy();
+      }
+
+      return;
+    }
+
     if (response.destroyed) {
       return;
     }
 
     if (error instanceof WorkerAbortedError || controller.signal.aborted) {
-      sendJson(
-        response,
-        authenticated && parsedRequest ? 200 : 504,
-        authenticated && parsedRequest
-          ? {
-              ok: false,
-              requestId: parsedRequest.requestId,
-              code: "timeout",
-            }
-          : { error: "Worker request timed out." }
-      );
+      try {
+        phase = "writing_response";
+        options.writeResponse(
+          response,
+          authenticated && parsedRequest ? 200 : 504,
+          authenticated && parsedRequest
+            ? {
+                ok: false,
+                requestId: parsedRequest.requestId,
+                code: "timeout",
+              }
+            : { error: "Worker request timed out." }
+        );
+      } catch {
+        if (authenticated && parsedRequest) {
+          emitInternalDiagnostic(
+            options,
+            parsedRequest.requestId,
+            "writing_response"
+          );
+        }
+        response.destroy();
+      }
       return;
     }
 
-    sendJson(response, error instanceof WorkerBusyError ? 503 : 500, {
-      error: "Worker unavailable.",
-    });
+    if (error instanceof WorkerBusyError) {
+      try {
+        phase = "writing_response";
+        options.writeResponse(response, 503, {
+          error: "Worker unavailable.",
+        });
+      } catch {
+        if (authenticated && parsedRequest) {
+          emitInternalDiagnostic(
+            options,
+            parsedRequest.requestId,
+            "writing_response"
+          );
+        }
+        response.destroy();
+      }
+      return;
+    }
+
+    if (authenticated && parsedRequest) {
+      const diagnostic = createInternalDiagnostic(
+        parsedRequest.requestId,
+        phase
+      );
+      emitDiagnostic(options, diagnostic);
+
+      try {
+        phase = "writing_response";
+        options.writeResponse(response, 200, {
+          ok: false,
+          requestId: parsedRequest.requestId,
+          code: "unavailable",
+          diagnostic,
+        });
+      } catch {
+        emitInternalDiagnostic(
+          options,
+          parsedRequest.requestId,
+          "writing_response"
+        );
+        response.destroy();
+      }
+      return;
+    }
+
+    try {
+      options.writeResponse(response, 500, {
+        error: "Worker unavailable.",
+      });
+    } catch {
+      response.destroy();
+    }
   } finally {
     clearTimeout(deadline);
     request.removeListener("aborted", abortForDisconnect);
@@ -247,6 +349,38 @@ async function handleRequest(
     if (parsedRequest) {
       parsedRequest.token = "";
     }
+  }
+}
+
+function createInternalDiagnostic(
+  requestId: string,
+  phase: CopilotWorkerRequestPhase
+): SafeCopilotWorkerInternalDiagnostic {
+  return {
+    event: "copilot_worker_internal_error",
+    requestId,
+    code: "WORKER_INTERNAL_FAILURE",
+    message: "copilot worker failed internally",
+    phase,
+  };
+}
+
+function emitInternalDiagnostic(
+  options: CopilotWorkerServerOptions,
+  requestId: string,
+  phase: CopilotWorkerRequestPhase
+) {
+  emitDiagnostic(options, createInternalDiagnostic(requestId, phase));
+}
+
+function emitDiagnostic(
+  options: CopilotWorkerServerOptions,
+  diagnostic: SafeCopilotWorkerInternalDiagnostic
+) {
+  try {
+    options.onDiagnostic?.(diagnostic);
+  } catch {
+    // Diagnostics must not affect request handling.
   }
 }
 

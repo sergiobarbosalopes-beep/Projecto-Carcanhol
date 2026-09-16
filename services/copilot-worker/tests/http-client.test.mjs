@@ -62,6 +62,51 @@ test("BFF client and worker exchange a signed validation request", async () => {
   }
 });
 
+test("BFF accepts only the fixed post-authentication worker failure", async () => {
+  const diagnostics = [];
+  const server = createCopilotWorkerServer({
+    hmacSecret: secret,
+    validate: async () => {
+      throw new Error(`internal failure for ${token}`);
+    },
+    onDiagnostic(diagnostic) {
+      diagnostics.push(diagnostic);
+    },
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+
+  try {
+    const address = server.address();
+    assert.equal(typeof address, "object");
+    const validate = createCopilotWorkerHttpClient({
+      baseUrl: `http://127.0.0.1:${address.port}`,
+      hmacSecret: secret,
+      timeoutMs: 1_000,
+    });
+    const result = await validate(token, requestId);
+    const diagnostic = {
+      event: "copilot_worker_internal_error",
+      requestId,
+      code: "WORKER_INTERNAL_FAILURE",
+      message: "copilot worker failed internally",
+      phase: "validating",
+    };
+
+    assert.deepEqual(result, {
+      ok: false,
+      requestId,
+      code: "unavailable",
+      diagnostic,
+    });
+    assert.deepEqual(diagnostics, [diagnostic]);
+    assert.equal(JSON.stringify(result).includes(token), false);
+  } finally {
+    server.close();
+    await once(server, "close");
+  }
+});
+
 test("BFF client maps timeouts and malformed responses without reflection", async () => {
   const timeoutClient = createCopilotWorkerHttpClient({
     baseUrl: "https://worker.example",

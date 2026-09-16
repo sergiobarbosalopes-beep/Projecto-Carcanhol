@@ -213,6 +213,12 @@ timeout ou resposta inválida recebem apenas códigos e mensagens locais fixos.
 O diagnóstico é devolvido somente pelo endpoint autenticado de revalidação e
 nunca é persistido ou mostrado pela UI.
 
+Depois de autenticação HMAC e parsing válido, uma exceção interna do worker
+também regressa como `unavailable` com apenas
+`WORKER_INTERNAL_FAILURE`, uma mensagem fixa e a fase allowlisted. Antes da
+autenticação não há diagnóstico correlacionado; se falhar a escrita da
+resposta, a ligação é encerrada sem tentar emitir outra resposta.
+
 O SDK também suporta tokens de utilizador OAuth `gho_` e GitHub App `ghu_`,
 mas estes tipos estão apenas preparados no schema e são rejeitados pelo
 formulário manual. OAuth/GitHub App user-to-server será a opção recomendada

@@ -2,6 +2,7 @@ import "server-only";
 
 import type {
   CopilotModel,
+  SafeCopilotWorkerInternalDiagnostic,
   SafeCopilotWorkerTransportDiagnostic,
   SafeCopilotUnavailableDiagnostic,
   SafeUnknownCopilotErrorDiagnostic,
@@ -47,7 +48,9 @@ export type LlmProviderValidationResult =
       ok: false;
       code: "unavailable";
       diagnostic?:
-        SafeCopilotUnavailableDiagnostic | WorkerUnavailableDiagnostic;
+        | SafeCopilotUnavailableDiagnostic
+        | SafeCopilotWorkerInternalDiagnostic
+        | WorkerUnavailableDiagnostic;
     }
   | {
       ok: false;

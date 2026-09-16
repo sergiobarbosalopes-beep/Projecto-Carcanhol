@@ -10,6 +10,7 @@ import { createCopilotWorkerServer } from "../dist/server.js";
 
 const secret = Buffer.alloc(32, 23);
 const token = `github_pat_${"T".repeat(40)}`;
+const internalFailureMessage = "copilot worker failed internally";
 
 test("serves health without details and validates only authenticated strict requests", async () => {
   const server = createCopilotWorkerServer({
@@ -136,8 +137,12 @@ test("health is readiness-aware and recovers with the replay store", async () =>
 });
 
 test("never reflects a token from an invalid signed payload", async () => {
+  let diagnosticCalls = 0;
   const server = createCopilotWorkerServer({
     hmacSecret: secret,
+    onDiagnostic() {
+      diagnosticCalls += 1;
+    },
     validate: async () => {
       throw new Error(token);
     },
@@ -169,6 +174,206 @@ test("never reflects a token from an invalid signed payload", async () => {
 
     assert.equal(response.status, 400);
     assert.equal(responseBody.includes(token), false);
+    assert.equal(diagnosticCalls, 0);
+  } finally {
+    server.close();
+    await once(server, "close");
+  }
+});
+
+test("keeps authentication failures opaque before request parsing", async () => {
+  let diagnosticCalls = 0;
+  const server = createCopilotWorkerServer({
+    hmacSecret: secret,
+    replayStore: {
+      async consume() {
+        throw new Error(token);
+      },
+    },
+    onDiagnostic() {
+      diagnosticCalls += 1;
+    },
+    validate: async ({ requestId }) => ({
+      ok: false,
+      requestId,
+      code: "unknown",
+    }),
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+
+  try {
+    const address = server.address();
+    assert.equal(typeof address, "object");
+    const requestId = "2a15da72-2e72-4819-a3c8-fd48006ef427";
+    const body = JSON.stringify({ requestId, token });
+    const headers = createSignedWorkerHeaders({
+      body,
+      method: "POST",
+      path: COPILOT_VALIDATION_PATH,
+      requestId,
+      secret,
+    });
+    const response = await fetch(
+      `http://127.0.0.1:${address.port}${COPILOT_VALIDATION_PATH}`,
+      {
+        method: "POST",
+        body,
+        headers: { ...headers, "Content-Type": "application/json" },
+      }
+    );
+    const responseBody = await response.text();
+
+    assert.equal(response.status, 500);
+    assert.deepEqual(JSON.parse(responseBody), {
+      error: "Worker unavailable.",
+    });
+    assert.equal(responseBody.includes(token), false);
+    assert.equal(diagnosticCalls, 0);
+  } finally {
+    server.close();
+    await once(server, "close");
+  }
+});
+
+test("reports fixed internal diagnostics after authenticated validation starts", async () => {
+  const cases = [
+    {
+      phase: "validating",
+      requestId: "78db495f-2834-407c-b2eb-d7554b565293",
+      validate: async () => {
+        throw new Error(`runtime failed for ${token}`);
+      },
+    },
+    {
+      phase: "validating_response",
+      requestId: "3a6c572b-3caf-4c5d-9f73-48d89d43675f",
+      validate: async ({ requestId }) => ({
+        ok: true,
+        requestId,
+        models: [],
+        raw: token,
+      }),
+    },
+  ];
+
+  for (const { phase, requestId, validate } of cases) {
+    const diagnostics = [];
+    const server = createCopilotWorkerServer({
+      hmacSecret: secret,
+      validate,
+      onDiagnostic(diagnostic) {
+        diagnostics.push(diagnostic);
+      },
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+
+    try {
+      const address = server.address();
+      assert.equal(typeof address, "object");
+      const body = JSON.stringify({ requestId, token });
+      const headers = createSignedWorkerHeaders({
+        body,
+        method: "POST",
+        path: COPILOT_VALIDATION_PATH,
+        requestId,
+        secret,
+      });
+      const response = await fetch(
+        `http://127.0.0.1:${address.port}${COPILOT_VALIDATION_PATH}`,
+        {
+          method: "POST",
+          body,
+          headers: { ...headers, "Content-Type": "application/json" },
+        }
+      );
+      const responseBody = await response.text();
+      const expectedDiagnostic = {
+        event: "copilot_worker_internal_error",
+        requestId,
+        code: "WORKER_INTERNAL_FAILURE",
+        message: internalFailureMessage,
+        phase,
+      };
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(JSON.parse(responseBody), {
+        ok: false,
+        requestId,
+        code: "unavailable",
+        diagnostic: expectedDiagnostic,
+      });
+      assert.deepEqual(diagnostics, [expectedDiagnostic]);
+      assert.equal(responseBody.includes(token), false);
+    } finally {
+      server.close();
+      await once(server, "close");
+    }
+  }
+});
+
+test("logs only a fixed phase when writing the validated response fails", async () => {
+  const diagnostics = [];
+  let writeCalls = 0;
+  const server = createCopilotWorkerServer({
+    hmacSecret: secret,
+    validate: async ({ requestId }) => ({
+      ok: true,
+      requestId,
+      models: [
+        {
+          id: "gpt-5",
+          displayName: "GPT-5",
+          capabilities: {},
+          policy: {},
+          billing: {},
+        },
+      ],
+    }),
+    onDiagnostic(diagnostic) {
+      diagnostics.push(diagnostic);
+    },
+    writeResponse() {
+      writeCalls += 1;
+      throw new Error(`write failed for ${token}`);
+    },
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+
+  try {
+    const address = server.address();
+    assert.equal(typeof address, "object");
+    const requestId = "40eb2135-76d2-45c2-a71c-7d057ad4e29d";
+    const body = JSON.stringify({ requestId, token });
+    const headers = createSignedWorkerHeaders({
+      body,
+      method: "POST",
+      path: COPILOT_VALIDATION_PATH,
+      requestId,
+      secret,
+    });
+
+    await assert.rejects(
+      fetch(`http://127.0.0.1:${address.port}${COPILOT_VALIDATION_PATH}`, {
+        method: "POST",
+        body,
+        headers: { ...headers, "Content-Type": "application/json" },
+      })
+    );
+
+    assert.equal(writeCalls, 1);
+    assert.deepEqual(diagnostics, [
+      {
+        event: "copilot_worker_internal_error",
+        requestId,
+        code: "WORKER_INTERNAL_FAILURE",
+        message: internalFailureMessage,
+        phase: "writing_response",
+      },
+    ]);
+    assert.equal(JSON.stringify(diagnostics).includes(token), false);
   } finally {
     server.close();
     await once(server, "close");

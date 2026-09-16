@@ -349,6 +349,16 @@ Estes diagnósticos só acompanham a resposta autenticada de revalidação, nunc
 são persistidos/listados/renderizados, e não alteram `unavailable`/`timeout`
 para um erro definitivo.
 
+O servidor mantém ainda uma fase interna fechada:
+`receiving_body`, `authenticating`, `parsing_request`, `validating`,
+`validating_response` ou `writing_response`. Exceções só são correlacionadas
+depois de autenticação HMAC e parsing válido; nesse ponto a resposta é HTTP 200
+com `code = unavailable` e o diagnóstico literal
+`copilot_worker_internal_error` / `WORKER_INTERNAL_FAILURE` /
+`copilot worker failed internally`, além da fase. Antes da autenticação
+continua a responder apenas com erros HTTP genéricos. Se a própria escrita
+falhar, a ligação é encerrada e só o diagnóstico fixo é registado.
+
 O worker expõe apenas `GET /health` e `POST /v1/copilot/validate`, rejeita
 `Origin` e não envia headers CORS. `/health` é readiness: faz `PING` e um
 `SET NX PX` efémero e bounded, devolvendo `503` sem detalhes quando Redis não

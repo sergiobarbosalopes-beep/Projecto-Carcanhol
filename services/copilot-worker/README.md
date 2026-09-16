@@ -88,6 +88,15 @@ acima. Nenhum diagnóstico BFF contém status numérico, URL, body, headers ou
 erro raw; uma indisponibilidade genérica fora deste cliente continua sem
 diagnóstico.
 
+O servidor acompanha internamente as fases `receiving_body`, `authenticating`,
+`parsing_request`, `validating`, `validating_response` e `writing_response`.
+Só depois de autenticação HMAC e payload válidos uma exceção interna pode
+originar HTTP 200 com `code = unavailable` e o diagnóstico literal
+`copilot_worker_internal_error` / `WORKER_INTERNAL_FAILURE` /
+`copilot worker failed internally`, acrescido apenas da fase. Antes disso,
+mantém respostas HTTP genéricas sem diagnóstico para não criar um oracle. Uma
+falha ao escrever a resposta fecha a ligação e apenas regista o objeto fixo.
+
 Cada lista tem no máximo oito itens e nomes/códigos têm no máximo 64
 caracteres allowlisted. A mensagem remove tokens GitHub, URLs, auth headers,
 valores secretos, conteúdo quoted/payloads e sequências de alta entropia. O

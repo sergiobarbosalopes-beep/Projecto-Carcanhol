@@ -1,5 +1,6 @@
 import { createCopilotSdkRuntime } from "./copilot-adapter";
 import { getWorkerConfig } from "./config";
+import type { SafeCopilotDiagnostic } from "./contract";
 import { createRedisReplayStore } from "./redis-replay-store";
 import { InMemoryReplayStore } from "./request-auth";
 import { validateCopilotCredential } from "./runtime";
@@ -7,6 +8,9 @@ import { createCopilotWorkerServer } from "./server";
 
 const config = getWorkerConfig();
 const replayStore = await initializeReplayStore();
+const logDiagnostic = (diagnostic: SafeCopilotDiagnostic) => {
+  console.warn(JSON.stringify(diagnostic));
+};
 const server = createCopilotWorkerServer({
   hmacSecret: config.COPILOT_WORKER_HMAC_SECRET,
   maxClockSkewMs: config.COPILOT_WORKER_CLOCK_SKEW_MS,
@@ -15,6 +19,7 @@ const server = createCopilotWorkerServer({
   healthTimeoutMs: config.COPILOT_REPLAY_STORE_TIMEOUT_MS,
   validationDeadlineMs: config.COPILOT_VALIDATION_TIMEOUT_MS,
   replayStore,
+  onDiagnostic: logDiagnostic,
   validate: async ({ requestId, token }, signal) => {
     const result = await validateCopilotCredential({
       token,
@@ -22,9 +27,7 @@ const server = createCopilotWorkerServer({
       timeoutMs: config.COPILOT_VALIDATION_TIMEOUT_MS,
       createRuntime: createCopilotSdkRuntime,
       signal,
-      onDiagnostic: (diagnostic) => {
-        console.warn(JSON.stringify(diagnostic));
-      },
+      onDiagnostic: logDiagnostic,
     });
 
     if (!result.ok && result.code !== "unknown") {
