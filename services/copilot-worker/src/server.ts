@@ -5,11 +5,16 @@ import {
 } from "node:http";
 import {
   COPILOT_HEALTH_PATH,
+  COPILOT_INFERENCE_PATH,
   COPILOT_VALIDATION_PATH,
   COPILOT_WORKER_HEADERS,
   COPILOT_WORKER_MAX_BODY_BYTES,
+  copilotInferenceRequestSchema,
+  copilotInferenceResponseSchema,
   copilotValidationRequestSchema,
   copilotValidationResponseSchema,
+  type CopilotInferenceRequest,
+  type CopilotInferenceResponse,
   type CopilotValidationRequest,
   type CopilotValidationResponse,
   type CopilotWorkerRequestPhase,
@@ -32,11 +37,16 @@ export type CopilotWorkerServerOptions = {
     request: CopilotValidationRequest,
     signal: AbortSignal
   ) => Promise<CopilotValidationResponse>;
+  infer?: (
+    request: CopilotInferenceRequest,
+    signal: AbortSignal
+  ) => Promise<CopilotInferenceResponse>;
   maxClockSkewMs?: number;
   maxConcurrency?: number;
   maxQueue?: number;
   healthTimeoutMs?: number;
   validationDeadlineMs?: number;
+  inferenceDeadlineMs?: number;
   replayStore?: ReplayStore;
   onDiagnostic?: (diagnostic: SafeCopilotWorkerInternalDiagnostic) => void;
   writeResponse?: typeof sendJson;
@@ -112,9 +122,13 @@ async function handleRequest(
     return;
   }
 
+  const isValidation = url.pathname === COPILOT_VALIDATION_PATH;
+  const isInference = url.pathname === COPILOT_INFERENCE_PATH;
+
   if (
     request.method !== "POST" ||
-    url.pathname !== COPILOT_VALIDATION_PATH ||
+    (!isValidation && !isInference) ||
+    (isInference && !options.infer) ||
     url.search
   ) {
     options.writeResponse(response, 404, { error: "Not found." });
@@ -177,11 +191,14 @@ async function handleRequest(
   response.once("close", abortForClosedResponse);
   const deadline = setTimeout(
     () => controller.abort(),
-    options.validationDeadlineMs ?? 15_000
+    isInference
+      ? (options.inferenceDeadlineMs ?? 20_000)
+      : (options.validationDeadlineMs ?? 15_000)
   );
   deadline.unref?.();
   let authenticated = false;
-  let parsedRequest: CopilotValidationRequest | null = null;
+  let parsedRequest: CopilotValidationRequest | CopilotInferenceRequest | null =
+    null;
 
   try {
     const authentication = await verifyWorkerRequest(
@@ -222,25 +239,53 @@ async function handleRequest(
       return;
     }
 
-    const parsed = copilotValidationRequestSchema.safeParse(input);
+    let validatedResult: CopilotValidationResponse | CopilotInferenceResponse;
 
-    if (!parsed.success || parsed.data.requestId !== authentication.requestId) {
-      options.writeResponse(response, 400, {
-        error: "Invalid request body.",
-      });
-      return;
+    if (isInference) {
+      const parsed = copilotInferenceRequestSchema.safeParse(input);
+
+      if (
+        !parsed.success ||
+        parsed.data.requestId !== authentication.requestId
+      ) {
+        options.writeResponse(response, 400, {
+          error: "Invalid request body.",
+        });
+        return;
+      }
+
+      parsedRequest = parsed.data;
+      phase = "validating";
+      const result = await options.gate.run(
+        () => options.infer!(parsed.data, controller.signal),
+        controller.signal
+      );
+      controller.signal.throwIfAborted();
+      phase = "validating_response";
+      validatedResult = copilotInferenceResponseSchema.parse(result);
+    } else {
+      const parsed = copilotValidationRequestSchema.safeParse(input);
+
+      if (
+        !parsed.success ||
+        parsed.data.requestId !== authentication.requestId
+      ) {
+        options.writeResponse(response, 400, {
+          error: "Invalid request body.",
+        });
+        return;
+      }
+
+      parsedRequest = parsed.data;
+      phase = "validating";
+      const result = await options.gate.run(
+        () => options.validate(parsed.data, controller.signal),
+        controller.signal
+      );
+      controller.signal.throwIfAborted();
+      phase = "validating_response";
+      validatedResult = copilotValidationResponseSchema.parse(result);
     }
-
-    const validatedRequest = parsed.data;
-    parsedRequest = validatedRequest;
-    phase = "validating";
-    const result = await options.gate.run(
-      () => options.validate(validatedRequest, controller.signal),
-      controller.signal
-    );
-    controller.signal.throwIfAborted();
-    phase = "validating_response";
-    const validatedResult = copilotValidationResponseSchema.parse(result);
 
     if (!response.destroyed) {
       phase = "writing_response";
@@ -319,7 +364,7 @@ async function handleRequest(
         options.writeResponse(response, 200, {
           ok: false,
           requestId: parsedRequest.requestId,
-          code: "unavailable",
+          code: "unavailable" as const,
           diagnostic,
         });
       } catch {
@@ -348,6 +393,10 @@ async function handleRequest(
 
     if (parsedRequest) {
       parsedRequest.token = "";
+
+      if ("prompt" in parsedRequest) {
+        parsedRequest.prompt = "";
+      }
     }
   }
 }

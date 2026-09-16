@@ -7,7 +7,9 @@ import {
   type SessionConfig,
 } from "@github/copilot-sdk";
 import {
+  copilotInferenceResponseSchema,
   copilotPremiumInteractionsQuotaSchema,
+  type CopilotInferenceResponse,
   type CopilotPremiumInteractionsQuota,
 } from "./contract";
 import type { CopilotRuntimeClient, CopilotRuntimeFactory } from "./runtime";
@@ -241,6 +243,24 @@ export function createValidationSessionConfig(
   token: string,
   sessionId: string
 ): SessionConfig {
+  return createIsolatedSessionConfig(token, sessionId);
+}
+
+export function createInferenceSessionConfig(
+  token: string,
+  sessionId: string,
+  model: string
+): SessionConfig {
+  return {
+    ...createIsolatedSessionConfig(token, sessionId),
+    model,
+  };
+}
+
+function createIsolatedSessionConfig(
+  token: string,
+  sessionId: string
+): SessionConfig {
   return {
     sessionId,
     gitHubToken: token,
@@ -284,6 +304,199 @@ export function createValidationSessionConfig(
     onPermissionRequest: denyAllPermissions,
   };
 }
+
+export async function runCopilotInference({
+  token,
+  model,
+  prompt,
+  requestId,
+  timeoutMs,
+  signal,
+}: {
+  token: string;
+  model: string;
+  prompt: string;
+  requestId: string;
+  timeoutMs: number;
+  signal: AbortSignal;
+}): Promise<CopilotInferenceResponse> {
+  signal.throwIfAborted();
+  const baseDirectory = await mkdtemp(
+    join(tmpdir(), "carcanhol-copilot-inference-")
+  );
+  let client: CopilotClient | null = null;
+
+  try {
+    await chmod(baseDirectory, 0o700);
+    signal.throwIfAborted();
+    client = new CopilotClient({
+      mode: "empty",
+      baseDirectory,
+      workingDirectory: baseDirectory,
+      useLoggedInUser: false,
+      logLevel: "none",
+      env: buildChildRuntimeEnvironment(baseDirectory),
+      builtinPluginDirectories: [],
+      enableRemoteSessions: false,
+    });
+    const activeClient = client;
+    const abortRuntime = () => void forceStop(activeClient);
+    signal.addEventListener("abort", abortRuntime, { once: true });
+
+    try {
+      await client.start();
+      signal.throwIfAborted();
+      return await inferWithSession(
+        client,
+        token,
+        requestId,
+        model,
+        prompt,
+        timeoutMs,
+        signal
+      );
+    } finally {
+      signal.removeEventListener("abort", abortRuntime);
+    }
+  } finally {
+    if (client) {
+      try {
+        const cleanupErrors = await withDeadline(client.stop(), 1_500);
+
+        if (cleanupErrors.length > 0) {
+          await forceStop(client);
+        }
+      } catch {
+        await forceStop(client);
+      }
+    }
+
+    await removeTemporaryState(baseDirectory);
+  }
+}
+
+export async function inferWithSession(
+  client: Pick<CopilotClient, "createSession" | "deleteSession">,
+  token: string,
+  sessionId: string,
+  model: string,
+  prompt: string,
+  timeoutMs: number,
+  signal: AbortSignal
+): Promise<CopilotInferenceResponse> {
+  const startedAt = Date.now();
+  let session: Awaited<ReturnType<CopilotClient["createSession"]>> | null =
+    null;
+
+  try {
+    signal.throwIfAborted();
+    session = await client.createSession(
+      createInferenceSessionConfig(token, sessionId, model)
+    );
+    const activeSession = session;
+    const abortSession = () =>
+      void ignoreCleanupFailure(() => activeSession.abort());
+    signal.addEventListener("abort", abortSession, { once: true });
+
+    try {
+      signal.throwIfAborted();
+      const response = await withInferenceDeadline(
+        activeSession.sendAndWait({ prompt }, timeoutMs),
+        timeoutMs,
+        signal
+      );
+      signal.throwIfAborted();
+
+      if (!response) {
+        return {
+          ok: false,
+          requestId: sessionId,
+          code: "invalid_response",
+        };
+      }
+
+      const metrics = await activeSession.rpc.usage.getMetrics();
+      signal.throwIfAborted();
+      const candidate = {
+        ok: true,
+        requestId: sessionId,
+        text: response.data.content,
+        usage: {
+          inputTokens: metrics.lastCallInputTokens,
+          outputTokens: metrics.lastCallOutputTokens,
+        },
+        durationMs: Date.now() - startedAt,
+      };
+      const parsed = copilotInferenceResponseSchema.safeParse(candidate);
+
+      return parsed.success
+        ? parsed.data
+        : {
+            ok: false,
+            requestId: sessionId,
+            code: "invalid_response",
+          };
+    } catch (error) {
+      if (error instanceof InferenceDeadlineError || signal.aborted) {
+        await ignoreCleanupFailure(() =>
+          withDeadline(activeSession.abort(), 1_000)
+        );
+        return {
+          ok: false,
+          requestId: sessionId,
+          code: "timeout",
+        };
+      }
+
+      throw error;
+    } finally {
+      signal.removeEventListener("abort", abortSession);
+    }
+  } finally {
+    const activeSession = session;
+
+    if (activeSession) {
+      await ignoreCleanupFailure(() =>
+        withDeadline(activeSession.disconnect(), 1_000)
+      );
+    }
+
+    await ignoreCleanupFailure(() =>
+      withDeadline(client.deleteSession(sessionId), 1_000)
+    );
+  }
+}
+
+async function withInferenceDeadline<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  signal: AbortSignal
+) {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let abortForCaller: (() => void) | undefined;
+
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        const rejectAsTimeout = () => reject(new InferenceDeadlineError());
+        abortForCaller = rejectAsTimeout;
+        signal.addEventListener("abort", rejectAsTimeout, { once: true });
+        timeout = setTimeout(rejectAsTimeout, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+
+    if (abortForCaller) {
+      signal.removeEventListener("abort", abortForCaller);
+    }
+  }
+}
+
+class InferenceDeadlineError extends Error {}
 
 export async function listModelsWithSession(
   client: Pick<CopilotClient, "createSession" | "deleteSession">,

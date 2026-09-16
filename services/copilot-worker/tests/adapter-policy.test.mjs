@@ -3,8 +3,10 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   buildChildRuntimeEnvironment,
+  createInferenceSessionConfig,
   createValidationSessionConfig,
   denyAllPermissions,
+  inferWithSession,
   listModelsWithSession,
 } from "../dist/copilot-adapter.js";
 import {
@@ -185,7 +187,6 @@ test("pins the SDK and configures empty mode without logged-in fallback", () => 
   assert.match(adapter, /gitHubToken: this\.token/);
   assert.match(adapter, /activeSession\.disconnect/);
   assert.match(adapter, /client\.deleteSession/);
-  assert.doesNotMatch(adapter, /\.send(?:AndWait)?\(/);
   assert.doesNotMatch(adapter, /approveAll/);
 
   const constructorStart = adapter.indexOf("new CopilotClient({");
@@ -196,6 +197,215 @@ test("pins the SDK and configures empty mode without logged-in fallback", () => 
     adapter.slice(constructorStart, constructorEnd),
     /gitHubToken/
   );
+});
+
+test("builds inference sessions with the trusted model and every optional capability disabled", () => {
+  const token = `github_pat_${"D".repeat(40)}`;
+  const sessionId = "54ec5d09-71ca-4f63-b46b-a85bbcfe03d3";
+  const config = createInferenceSessionConfig(
+    token,
+    sessionId,
+    "claude-haiku-4.5"
+  );
+
+  assert.equal(config.sessionId, sessionId);
+  assert.equal(config.gitHubToken, token);
+  assert.equal(config.model, "claude-haiku-4.5");
+  assert.deepEqual(config.availableTools, []);
+  assert.deepEqual(config.excludedTools, ["builtin:*", "mcp:*", "custom:*"]);
+  assert.deepEqual(config.tools, []);
+  assert.deepEqual(config.mcpServers, {});
+  assert.deepEqual(config.customAgents, []);
+  assert.deepEqual(config.skillDirectories, []);
+  assert.deepEqual(config.includedBuiltinSkills, []);
+  assert.equal(config.enableSkills, false);
+  assert.equal(config.enableSessionStore, false);
+  assert.equal(config.enableSessionTelemetry, false);
+  assert.equal(config.enableFileChangeTracking, false);
+  assert.deepEqual(config.infiniteSessions, { enabled: false });
+  assert.deepEqual(config.memory, { enabled: false });
+  assert.equal(config.streaming, false);
+});
+
+test("runs one inference and always disconnects and deletes the session", async () => {
+  const events = [];
+  let capturedConfig;
+  let capturedPrompt;
+  const client = {
+    async createSession(config) {
+      events.push("create");
+      capturedConfig = config;
+      return {
+        rpc: {
+          usage: {
+            async getMetrics() {
+              events.push("usage");
+              return { lastCallInputTokens: 9, lastCallOutputTokens: 6 };
+            },
+          },
+        },
+        async sendAndWait({ prompt }) {
+          events.push("send");
+          capturedPrompt = prompt;
+          return { data: { content: "Lisboa" } };
+        },
+        async abort() {
+          events.push("abort");
+        },
+        async disconnect() {
+          events.push("disconnect");
+        },
+      };
+    },
+    async deleteSession(id) {
+      events.push(`delete:${id}`);
+    },
+  };
+  const sessionId = "8792386e-a451-4da9-9587-8d959ed54af8";
+  const result = await inferWithSession(
+    client,
+    `github_pat_${"E".repeat(40)}`,
+    sessionId,
+    "claude-haiku-4.5",
+    "Qual é a capital de Portugal?",
+    1_000,
+    new AbortController().signal
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.text, "Lisboa");
+  assert.deepEqual(result.usage, { inputTokens: 9, outputTokens: 6 });
+  assert.equal(capturedPrompt, "Qual é a capital de Portugal?");
+  assert.equal(capturedConfig.model, "claude-haiku-4.5");
+  assert.deepEqual(events, [
+    "create",
+    "send",
+    "usage",
+    "disconnect",
+    `delete:${sessionId}`,
+  ]);
+});
+
+test("rejects malformed inference output and still cleans up", async () => {
+  const events = [];
+  const client = {
+    async createSession() {
+      events.push("create");
+      return {
+        rpc: {
+          usage: {
+            async getMetrics() {
+              events.push("usage");
+              return { lastCallInputTokens: 1, lastCallOutputTokens: 99 };
+            },
+          },
+        },
+        async sendAndWait() {
+          events.push("send");
+          return { data: { content: "x".repeat(4_097) } };
+        },
+        async abort() {
+          events.push("abort");
+        },
+        async disconnect() {
+          events.push("disconnect");
+        },
+      };
+    },
+    async deleteSession(id) {
+      events.push(`delete:${id}`);
+    },
+  };
+  const sessionId = "28b79e9c-f128-4937-9412-8a5978594d1c";
+  const result = await inferWithSession(
+    client,
+    `github_pat_${"F".repeat(40)}`,
+    sessionId,
+    "claude-haiku-4.5",
+    "bounded",
+    1_000,
+    new AbortController().signal
+  );
+
+  assert.deepEqual(result, {
+    ok: false,
+    requestId: sessionId,
+    code: "invalid_response",
+  });
+  assert.deepEqual(events, [
+    "create",
+    "send",
+    "usage",
+    "disconnect",
+    `delete:${sessionId}`,
+  ]);
+});
+
+test("aborts timed-out inference before disconnect and delete cleanup", async () => {
+  const events = [];
+  const client = {
+    async createSession() {
+      events.push("create");
+      return {
+        rpc: { usage: { async getMetrics() {} } },
+        async sendAndWait() {
+          events.push("send");
+          return new Promise(() => {});
+        },
+        async abort() {
+          events.push("abort");
+        },
+        async disconnect() {
+          events.push("disconnect");
+        },
+      };
+    },
+    async deleteSession(id) {
+      events.push(`delete:${id}`);
+    },
+  };
+  const sessionId = "d1dd9413-5428-4582-912e-0b594607f111";
+  const result = await inferWithSession(
+    client,
+    `github_pat_${"G".repeat(40)}`,
+    sessionId,
+    "claude-haiku-4.5",
+    "bounded",
+    5,
+    new AbortController().signal
+  );
+
+  assert.deepEqual(result, {
+    ok: false,
+    requestId: sessionId,
+    code: "timeout",
+  });
+  assert.deepEqual(events, [
+    "create",
+    "send",
+    "abort",
+    "disconnect",
+    `delete:${sessionId}`,
+  ]);
+});
+
+test("production inference cleanup stops the client and removes temporary state", () => {
+  const adapter = readFileSync(
+    new URL("../src/copilot-adapter.ts", import.meta.url),
+    "utf8"
+  );
+  const inferenceStart = adapter.indexOf(
+    "export async function runCopilotInference"
+  );
+  const inferenceEnd = adapter.indexOf(
+    "export async function inferWithSession",
+    inferenceStart
+  );
+  const implementation = adapter.slice(inferenceStart, inferenceEnd);
+
+  assert.match(implementation, /client\.stop\(\)/);
+  assert.match(implementation, /forceStop\(client\)/);
+  assert.match(implementation, /removeTemporaryState\(baseDirectory\)/);
 });
 
 test("installs and verifies the native runtime CA bundle", () => {

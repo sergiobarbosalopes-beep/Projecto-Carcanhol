@@ -31,6 +31,12 @@ const workerEnvSchema = z.object({
     .min(1_000)
     .max(15_000)
     .default(15_000),
+  COPILOT_INFERENCE_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .min(5_000)
+    .max(25_000)
+    .default(20_000),
   COPILOT_WORKER_CLOCK_SKEW_MS: z.coerce
     .number()
     .int()
@@ -70,6 +76,7 @@ export function parseWorkerConfig(
     PORT: environment.PORT,
     COPILOT_WORKER_HMAC_SECRET: environment.COPILOT_WORKER_HMAC_SECRET,
     COPILOT_VALIDATION_TIMEOUT_MS: environment.COPILOT_VALIDATION_TIMEOUT_MS,
+    COPILOT_INFERENCE_TIMEOUT_MS: environment.COPILOT_INFERENCE_TIMEOUT_MS,
     COPILOT_WORKER_CLOCK_SKEW_MS: environment.COPILOT_WORKER_CLOCK_SKEW_MS,
     COPILOT_WORKER_MAX_CONCURRENCY: environment.COPILOT_WORKER_MAX_CONCURRENCY,
     COPILOT_WORKER_MAX_QUEUE: environment.COPILOT_WORKER_MAX_QUEUE,

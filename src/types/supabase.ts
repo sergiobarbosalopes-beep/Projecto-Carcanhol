@@ -358,6 +358,24 @@ export type Database = {
         };
         Returns: string;
       };
+      get_llm_inference_target: {
+        Args: {
+          p_user_id: string;
+          p_account_model_id: string;
+        };
+        Returns: {
+          account_id: string;
+          provider: string;
+          provider_model_id: string;
+          aad_provider: string;
+          ciphertext: string;
+          nonce: string;
+          auth_tag: string;
+          algorithm: string;
+          envelope_version: number;
+          key_version: string;
+        }[];
+      };
       rotate_llm_account_secret: {
         Args: {
           p_account_id: string;

@@ -1,6 +1,6 @@
 # GitHub Copilot validation worker
 
-Serviço Node.js isolado que expõe apenas duas operações HTTP:
+Serviço Node.js isolado que expõe apenas três operações HTTP:
 
 - `GET /health` faz `PING` e um `SET NX PX` efémero no replay store, devolvendo
   `200 {"status":"ok"}` ou `503 {"status":"unavailable"}` sem versão ou
@@ -9,12 +9,22 @@ Serviço Node.js isolado que expõe apenas duas operações HTTP:
   `@github/copilot-sdk@1.0.14` (Copilot CLI 1.0.85) para `start()` + sessão
   efémera + `session.rpc.model.list({})` +
   `client.rpc.account.getQuota({ gitHubToken })` + cleanup + `stop()`.
+- `POST /v1/copilot/infer` autentica o mesmo contrato HMAC e executa uma única
+  mensagem com o modelo selecionado pelo BFF.
 
-Não aceita prompts, tools ou pedidos de browser. O runtime usa
+Não aceita pedidos de browser. O runtime usa
 `mode: "empty"`, `useLoggedInUser: false`, log level `none` e um diretório
 temporário `0700` removido no fim. Cada validação cria uma sessão request-bound
-sem modelo, prompt, tools, MCP, agents, skills, memory, telemetry ou session
-store; `denyAllPermissions` rejeita qualquer permission request inesperada.
+sem tools, MCP, agents, skills, memory, telemetry ou session store;
+`denyAllPermissions` rejeita qualquer permission request inesperada.
+
+A inferência aceita apenas `requestId`, token, modelo e prompt limitado a 500
+caracteres no path exato `/v1/copilot/infer`. O modelo vem da predefinição
+global resolvida pelo BFF, nunca do browser. A resposta estrita contém texto
+até 4 096 caracteres, duração e opcionalmente contadores inteiros de tokens.
+O prompt, a resposta, o token, a assinatura e erros raw do provider nunca são
+registados. A sessão é sempre abortada em timeout, desligada, eliminada e o
+cliente/runtime e diretório temporário são limpos em `finally`.
 
 `auth.getStatus` não é usado como precondição: pode continuar `false` antes de
 o runtime consumir o token. Depois de `client.start()`, o adapter passa
@@ -166,6 +176,7 @@ Variáveis:
 | `COPILOT_WORKER_HMAC_SECRET`      | sim         | base64 canónico de 32–64 bytes; igual no BFF      |
 | `PORT`                            | não         | `3000` por omissão; Vercel injeta `$PORT`         |
 | `COPILOT_VALIDATION_TIMEOUT_MS`   | não         | 1–15 s, omissão 15 s                              |
+| `COPILOT_INFERENCE_TIMEOUT_MS`    | não         | 5–25 s, omissão 20 s                              |
 | `COPILOT_WORKER_CLOCK_SKEW_MS`    | não         | 5–120 s, omissão 30 s                             |
 | `COPILOT_WORKER_MAX_CONCURRENCY`  | não         | 1–8, omissão 2                                    |
 | `COPILOT_WORKER_MAX_QUEUE`        | não         | 0–100, omissão 8                                  |
@@ -173,9 +184,9 @@ Variáveis:
 | `COPILOT_REPLAY_REDIS_PREFIX`     | não         | prefixo isolado das nonces                        |
 | `COPILOT_REPLAY_STORE_TIMEOUT_MS` | não         | timeout Redis, omissão 1 s                        |
 
-O BFF aceita 25–60 s (`COPILOT_WORKER_TIMEOUT_MS`, 30 s por omissão) e o worker
-aceita no máximo 15 s. A margem mínima de dez segundos cobre cleanup e
-latência da resposta.
+O BFF aceita 25–60 s (`COPILOT_WORKER_TIMEOUT_MS`, 30 s por omissão). O worker
+aceita no máximo 15 s para validação e 25 s para inferência; os valores
+predefinidos deixam margem para cleanup e latência da resposta.
 
 Teste real, sempre opt-in:
 

@@ -1,8 +1,11 @@
 import {
   COPILOT_WORKER_TRANSPORT_DIAGNOSTICS,
+  COPILOT_INFERENCE_PATH,
   COPILOT_VALIDATION_PATH,
   COPILOT_WORKER_MAX_RESPONSE_BYTES,
+  copilotInferenceResponseSchema,
   copilotValidationResponseSchema,
+  type CopilotInferenceResponse,
   type CopilotValidationResponse,
   type CopilotWorkerTransportFailure,
   type SafeNetworkCauseCode,
@@ -19,6 +22,9 @@ type WorkerHttpClientOptions = {
 
 export type CopilotWorkerClientResult =
   CopilotValidationResponse | CopilotWorkerTransportFailure;
+
+export type CopilotInferenceWorkerClientResult =
+  CopilotInferenceResponse | CopilotWorkerTransportFailure;
 
 export function createCopilotWorkerHttpClient({
   baseUrl,
@@ -79,6 +85,94 @@ export function createCopilotWorkerHttpClient({
       try {
         const responseBody = await readBoundedResponse(response);
         const parsed = copilotValidationResponseSchema.safeParse(
+          JSON.parse(responseBody)
+        );
+
+        if (!parsed.success || parsed.data.requestId !== requestId) {
+          return createInvalidResponseFailure(requestId);
+        }
+
+        return parsed.data;
+      } catch (error) {
+        return isTimeoutError(error)
+          ? createTimeoutFailure(requestId)
+          : createInvalidResponseFailure(requestId);
+      }
+    } catch (error) {
+      return isTimeoutError(error)
+        ? createTimeoutFailure(requestId)
+        : createUnavailableFailure(
+            requestId,
+            "networkError",
+            findSafeNetworkCauseCode(error)
+          );
+    } finally {
+      body = "";
+    }
+  };
+}
+
+export function createCopilotInferenceWorkerHttpClient({
+  baseUrl,
+  hmacSecret,
+  timeoutMs,
+  fetchImpl = fetch,
+}: WorkerHttpClientOptions) {
+  const endpoint = new URL(COPILOT_INFERENCE_PATH, `${baseUrl}/`);
+
+  return async function infer(
+    token: string,
+    model: string,
+    prompt: string,
+    requestId: string
+  ): Promise<CopilotInferenceWorkerClientResult> {
+    let body = JSON.stringify({ requestId, token, model, prompt });
+    const headers = createSignedWorkerHeaders({
+      body,
+      method: "POST",
+      path: COPILOT_INFERENCE_PATH,
+      requestId,
+      secret: hmacSecret,
+    });
+
+    try {
+      const response = await fetchImpl(endpoint, {
+        method: "POST",
+        body,
+        cache: "no-store",
+        credentials: "omit",
+        redirect: "error",
+        signal: AbortSignal.timeout(timeoutMs),
+        headers: {
+          ...headers,
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (response.status === 504) {
+        return createTimeoutFailure(requestId);
+      }
+
+      if (!response.ok) {
+        if (response.status === 401 || response.status === 403) {
+          return createUnavailableFailure(requestId, "authRejected");
+        }
+
+        if (response.status === 429) {
+          return createUnavailableFailure(requestId, "rateLimited");
+        }
+
+        if (response.status >= 500 && response.status <= 599) {
+          return createUnavailableFailure(requestId, "httpUnavailable");
+        }
+
+        return createUnavailableFailure(requestId, "httpError");
+      }
+
+      try {
+        const responseBody = await readBoundedResponse(response);
+        const parsed = copilotInferenceResponseSchema.safeParse(
           JSON.parse(responseBody)
         );
 

@@ -1,7 +1,7 @@
 # Arquitetura — Projecto Carcanhol
 
-Versão: 3.3
-Estado: Fase 3C implementada
+Versão: 3.4
+Estado: Fase 3D implementada
 
 ## 1. Objetivo e âmbito atual
 
@@ -22,11 +22,12 @@ A Fase 3B acrescenta validação real à fundação de produto e administração
 - descoberta e sincronização do catálogo de modelos por conta;
 - predefinição global atómica de uma combinação conta+modelo por utilizador;
 - utilização account-wide do GitHub Copilot, isolada da telemetria de sessões;
+- probe de inferência one-shot autenticado, sem UI ou persistência;
 - envelopes AES-256-GCM de credenciais numa tabela service-only;
 - contrato server-only para carregar futuramente Skills ativas.
 
-Pesquisa, Chat, Análises, geração LLM e dados financeiros não estão
-implementados. Os modelos atuais descobertos ficam disponíveis para seleção.
+Pesquisa, Chat, Análises e dados financeiros não estão implementados. O único
+uso generativo é o endpoint técnico one-shot, sem integração nessas páginas.
 
 ## 2. Arquitetura de execução
 
@@ -37,16 +38,16 @@ Browser
 Next.js 16 App Router / Vercel
   ├─ Proxy: refresh de sessão + rejeição antecipada
   ├─ layouts/pages: requireAuthorizedUser()
-  ├─ Route Handlers BFF: Zod + same-origin + auth/membership
+  ├─ Route Handlers BFF: Zod + same-origin + auth/membership + rate limit
   ├─ repositórios server-only: anon + sessão, sujeitos a RLS
   ├─ criação/rotação de segredo: autorização explícita + service role + RPC
   └─ client HMAC para o worker (URL server-only allowlisted)
          │ token plaintext apenas durante o pedido
          ▼
-      Copilot validation worker / Node 24 container
-        ├─ endpoint estrito validate/listModels/getQuota
+      Copilot validation/inference worker / Node 24 container
+        ├─ endpoints estritos validate e infer
         ├─ @github/copilot-sdk 1.0.14 / CLI 1.0.85, mode: empty
-        ├─ sem prompts persistidos, geração ou tools
+        ├─ inferência one-shot sem tools nem persistência
         └─ timeout, concorrência e replay bounded
   │
   ▼
@@ -96,6 +97,7 @@ cada handler de administração repete o guard junto do acesso aos dados.
 | `PUT`    | `/api/admin/llm-accounts/:id/credential` | nova credencial          | Substitui envelope          |
 | `DELETE` | `/api/admin/llm-accounts/:id`            | confirmationName         | Elimina conta + segredo     |
 | `PUT`    | `/api/admin/llm-default`                 | accountModelId           | Troca predefinição global   |
+| `POST`   | `/api/llm/infer`                         | prompt                   | Inferência one-shot         |
 
 Todos os inputs são validados com Zod. Handlers mutantes exigem um header
 `Origin` correspondente ao origin efetivo, considerando
@@ -120,6 +122,7 @@ As migrations são aplicadas por ordem e são reexecutáveis:
 5. `0005_github_copilot_validation.sql`;
 6. `0006_preserve_transient_validation_catalog.sql`.
 7. `0007_llm_defaults_and_provider_quota.sql`.
+8. `0008_llm_inference_default.sql`.
 
 Nenhuma migration cria objetos de aplicação em `public`.
 
@@ -453,6 +456,27 @@ e
 [Vercel Services](https://vercel.com/kb/guide/vercel-services),
 [service bindings](https://vercel.com/docs/services/bindings) e
 [container images](https://vercel.com/docs/functions/container-images).
+
+### Inferência one-shot
+
+O BFF autentica primeiro, aplica same-origin e rate limits e aceita somente um
+`prompt` de 1–500 caracteres. A preferência global é lida com anon+sessão sob
+RLS; conta, modelo e token não são campos do request. Uma RPC service-only
+recebe o `user_id` autenticado e o ID selecionado e volta a confirmar
+atomicamente a mesma preferência, provider `github_copilot`, conta `active`,
+última validação `succeeded` e modelo `is_stale = false` antes de devolver o
+envelope cifrado.
+
+`POST /v1/copilot/infer` usa o mesmo HMAC, SHA-256 do body, UUID, timestamp,
+replay store distribuído, allowlist de paths, limites de body, concorrência e
+fila. O worker rejeita browser `Origin`, fixa o modelo recebido do BFF e usa
+uma sessão SDK `mode: "empty"` com tools/MCP/agents/skills/memory/store,
+telemetria, streaming e file tracking desativados. Em sucesso devolve somente
+texto limitado a 4 096 caracteres, duração limitada e contadores inteiros de
+input/output tokens. Em qualquer saída executa `disconnect`,
+`deleteSession`, `stop`/`forceStop` e apaga o diretório temporário; timeout
+também chama `abort`. Não existem tabelas, logs ou eventos da aplicação para
+prompt, resposta ou sessão.
 
 ### Skills e premissas
 

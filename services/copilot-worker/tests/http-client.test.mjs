@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { createCopilotWorkerHttpClient } from "../dist/http-client.js";
+import {
+  createCopilotInferenceWorkerHttpClient,
+  createCopilotWorkerHttpClient,
+} from "../dist/http-client.js";
 import { validateCopilotCredential } from "../dist/runtime.js";
 import { createCopilotWorkerServer } from "../dist/server.js";
 
@@ -16,6 +19,39 @@ const clientSource = await readFile(
 
 test("does not log BFF transport failures", () => {
   assert.doesNotMatch(clientSource, /\bconsole\./);
+});
+
+test("BFF inference client signs trusted model input and rejects oversized output", async () => {
+  const requests = [];
+  const infer = createCopilotInferenceWorkerHttpClient({
+    baseUrl: "https://worker.example",
+    hmacSecret: secret,
+    timeoutMs: 1_000,
+    fetchImpl: async (_url, init) => {
+      requests.push(JSON.parse(init.body));
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          requestId,
+          text: "x".repeat(4_097),
+          durationMs: 1,
+        }),
+        { status: 200 }
+      );
+    },
+  });
+  const result = await infer(
+    token,
+    "claude-haiku-4.5",
+    "Qual é a capital de Portugal?",
+    requestId
+  );
+
+  assert.equal(requests[0].model, "claude-haiku-4.5");
+  assert.equal(requests[0].prompt, "Qual é a capital de Portugal?");
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "unknown");
+  assert.equal(JSON.stringify(result).includes(token), false);
 });
 
 test("BFF client and worker exchange a signed validation request", async () => {
