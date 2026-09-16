@@ -97,6 +97,7 @@ test("UI keeps generation separate, cancellable and non-persistent until save", 
   assert.match(panel, /Gerar novamente/);
   assert.match(panel, /Aplicar ao formulário/);
   assert.match(panel, /window\.confirm/);
+  assert.match(panel, /alterações manuais não guardadas serão descartadas/);
   assert.match(panel, /Nada foi persistido/);
   assert.match(panel, /<pre className=/);
   assert.doesNotMatch(panel, /dangerouslySetInnerHTML/);

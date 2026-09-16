@@ -344,7 +344,7 @@ function SkillsPanel({ initialSkills }: { initialSkills: SkillList }) {
     if (
       (mode === "create" || mode === "edit") &&
       !window.confirm(
-        "Sair do formulário atual? As alterações manuais não guardadas não serão substituídas, mas deixarão de estar visíveis."
+        "Sair do formulário atual? As alterações manuais não guardadas serão descartadas."
       )
     ) {
       return;
