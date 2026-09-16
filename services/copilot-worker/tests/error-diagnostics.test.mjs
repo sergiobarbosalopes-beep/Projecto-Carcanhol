@@ -5,7 +5,10 @@ import {
   createSafeUnknownCopilotErrorDiagnostic,
   redactCopilotDiagnosticMessage,
 } from "../dist/error-diagnostics.js";
-import { copilotValidationResponseSchema } from "../dist/contract.js";
+import {
+  copilotValidationResponseSchema,
+  copilotWorkerTransportFailureSchema,
+} from "../dist/contract.js";
 
 const requestId = "d510ccb5-22af-47b5-9280-3b605aac4c68";
 const pat = `github_pat_${"A".repeat(48)}`;
@@ -377,4 +380,112 @@ test("allows only fixed probe diagnostics on unavailable responses", () => {
     }).success,
     false
   );
+});
+
+test("allows only code-compatible fixed BFF transport diagnostics", () => {
+  const networkDiagnostic = {
+    event: "copilot_worker_transport_error",
+    requestId,
+    code: "WORKER_NETWORK_ERROR",
+    message: "copilot worker could not be reached",
+    causeCode: "CERT_HAS_EXPIRED",
+  };
+  const invalidResponseDiagnostic = {
+    event: "copilot_worker_transport_error",
+    requestId,
+    code: "WORKER_INVALID_RESPONSE",
+    message: "copilot worker returned an invalid response",
+  };
+  const timeoutDiagnostic = {
+    event: "copilot_worker_transport_error",
+    requestId,
+    code: "WORKER_TIMEOUT",
+    message: "copilot worker request timed out",
+  };
+
+  for (const value of [
+    {
+      ok: false,
+      requestId,
+      code: "unavailable",
+      diagnostic: networkDiagnostic,
+    },
+    {
+      ok: false,
+      requestId,
+      code: "unknown",
+      diagnostic: invalidResponseDiagnostic,
+    },
+    {
+      ok: false,
+      requestId,
+      code: "timeout",
+      diagnostic: timeoutDiagnostic,
+    },
+  ]) {
+    assert.equal(
+      copilotWorkerTransportFailureSchema.safeParse(value).success,
+      true
+    );
+  }
+
+  assert.equal(
+    copilotValidationResponseSchema.safeParse({
+      ok: false,
+      requestId,
+      code: "unavailable",
+      diagnostic: networkDiagnostic,
+    }).success,
+    false
+  );
+
+  for (const value of [
+    {
+      ok: false,
+      requestId,
+      code: "unavailable",
+      diagnostic: { ...networkDiagnostic, causeCode: "UND_ERR_SOCKET" },
+    },
+    {
+      ok: false,
+      requestId,
+      code: "unavailable",
+      diagnostic: { ...networkDiagnostic, status: 503 },
+    },
+    {
+      ok: false,
+      requestId,
+      code: "unavailable",
+      diagnostic: {
+        ...networkDiagnostic,
+        message: "worker failed at https://private.example",
+      },
+    },
+    {
+      ok: false,
+      requestId,
+      code: "unavailable",
+      diagnostic: invalidResponseDiagnostic,
+    },
+    {
+      ok: false,
+      requestId,
+      code: "timeout",
+      diagnostic: networkDiagnostic,
+    },
+    {
+      ok: false,
+      requestId,
+      code: "unknown",
+      diagnostic: {
+        ...invalidResponseDiagnostic,
+        requestId: "3bebcccd-5254-40f8-809f-3a14579dba46",
+      },
+    },
+  ]) {
+    assert.equal(
+      copilotWorkerTransportFailureSchema.safeParse(value).success,
+      false
+    );
+  }
 });

@@ -79,6 +79,15 @@ Só o primeiro pode incluir `causeCode`, limitado a `ENOTFOUND`, `EAI_AGAIN`,
 `SELF_SIGNED_CERT_IN_CHAIN` ou `UNABLE_TO_VERIFY_LEAF_SIGNATURE`. O
 diagnóstico não contém status, body, headers ou detalhe remoto.
 
+O cliente BFF distingue separadamente falhas no transporte até ao worker. O
+contrato efémero aceita apenas `WORKER_AUTH_REJECTED`, `WORKER_RATE_LIMITED`,
+`WORKER_HTTP_UNAVAILABLE`, `WORKER_HTTP_ERROR`, `WORKER_NETWORK_ERROR`,
+`WORKER_INVALID_RESPONSE` ou `WORKER_TIMEOUT`, sempre com mensagens literais.
+Só `WORKER_NETWORK_ERROR` pode incluir um `causeCode` da mesma allowlist curta
+acima. Nenhum diagnóstico BFF contém status numérico, URL, body, headers ou
+erro raw; uma indisponibilidade genérica fora deste cliente continua sem
+diagnóstico.
+
 Cada lista tem no máximo oito itens e nomes/códigos têm no máximo 64
 caracteres allowlisted. A mensagem remove tokens GitHub, URLs, auth headers,
 valores secretos, conteúdo quoted/payloads e sequências de alta entropia. O
@@ -90,7 +99,9 @@ O BFF preserva este campo exclusivamente na resposta autenticada
 persistido, não aparece em `GET /api/admin/llm-accounts` e não é renderizado
 por omissão na UI. Apenas `unknown` aceita o diagnóstico genérico e apenas
 `unavailable` aceita o diagnóstico estrito do probe; os restantes códigos
-rejeitam contratualmente o campo.
+rejeitam contratualmente o campo no protocolo worker. No BFF, `unknown`,
+`unavailable` e `timeout` aceitam apenas a variante de transporte compatível
+com o respetivo código.
 
 O token chega apenas no body HTTPS assinado e é entregue ao SDK em memória
 como `SessionConfig.gitHubToken`; nunca é usado em URL, log, erro, ficheiro ou

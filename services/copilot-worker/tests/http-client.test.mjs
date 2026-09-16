@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { createCopilotWorkerHttpClient } from "../dist/http-client.js";
 import { validateCopilotCredential } from "../dist/runtime.js";
@@ -8,6 +9,14 @@ import { createCopilotWorkerServer } from "../dist/server.js";
 const secret = Buffer.alloc(32, 29);
 const token = `github_pat_${"C".repeat(40)}`;
 const requestId = "3bebcccd-5254-40f8-809f-3a14579dba46";
+const clientSource = await readFile(
+  new URL("../src/http-client.ts", import.meta.url),
+  "utf8"
+);
+
+test("does not log BFF transport failures", () => {
+  assert.doesNotMatch(clientSource, /\bconsole\./);
+});
 
 test("BFF client and worker exchange a signed validation request", async () => {
   const server = createCopilotWorkerServer({
@@ -88,17 +97,211 @@ test("BFF client maps timeouts and malformed responses without reflection", asyn
     ok: false,
     requestId,
     code: "timeout",
+    diagnostic: {
+      event: "copilot_worker_transport_error",
+      requestId,
+      code: "WORKER_TIMEOUT",
+      message: "copilot worker request timed out",
+    },
   });
   assert.deepEqual(await malformedClient(token, requestId), {
     ok: false,
     requestId,
     code: "unknown",
+    diagnostic: {
+      event: "copilot_worker_transport_error",
+      requestId,
+      code: "WORKER_INVALID_RESPONSE",
+      message: "copilot worker returned an invalid response",
+    },
   });
   assert.deepEqual(await deadlineClient(token, requestId), {
     ok: false,
     requestId,
     code: "timeout",
+    diagnostic: {
+      event: "copilot_worker_transport_error",
+      requestId,
+      code: "WORKER_TIMEOUT",
+      message: "copilot worker request timed out",
+    },
   });
+});
+
+test("classifies non-2xx worker responses without reading response details", async () => {
+  const cases = [
+    [
+      401,
+      "unavailable",
+      "WORKER_AUTH_REJECTED",
+      "copilot worker rejected request authentication",
+    ],
+    [
+      403,
+      "unavailable",
+      "WORKER_AUTH_REJECTED",
+      "copilot worker rejected request authentication",
+    ],
+    [
+      429,
+      "unavailable",
+      "WORKER_RATE_LIMITED",
+      "copilot worker rate limited the request",
+    ],
+    [
+      500,
+      "unavailable",
+      "WORKER_HTTP_UNAVAILABLE",
+      "copilot worker returned an unavailable response",
+    ],
+    [
+      418,
+      "unavailable",
+      "WORKER_HTTP_ERROR",
+      "copilot worker returned an unexpected HTTP response",
+    ],
+    [504, "timeout", "WORKER_TIMEOUT", "copilot worker request timed out"],
+  ];
+
+  for (const [status, code, diagnosticCode, message] of cases) {
+    const accessed = [];
+    const response = new Proxy(
+      {},
+      {
+        get(_target, property) {
+          accessed.push(property);
+
+          if (property === "then") {
+            return undefined;
+          }
+
+          if (property === "status") {
+            return status;
+          }
+
+          if (property === "ok") {
+            return false;
+          }
+
+          throw new Error(`unexpected response access: ${String(property)}`);
+        },
+      }
+    );
+    const validate = createCopilotWorkerHttpClient({
+      baseUrl: "https://worker.example",
+      hmacSecret: secret,
+      timeoutMs: 1_000,
+      fetchImpl: async () => response,
+    });
+    const result = await validate(token, requestId);
+    const serialized = JSON.stringify(result);
+
+    assert.deepEqual(result, {
+      ok: false,
+      requestId,
+      code,
+      diagnostic: {
+        event: "copilot_worker_transport_error",
+        requestId,
+        code: diagnosticCode,
+        message,
+      },
+    });
+    assert.deepEqual(
+      [...new Set(accessed.filter((property) => property !== "then"))].sort(),
+      status === 504 ? ["status"] : ["ok", "status"]
+    );
+    assert.equal(serialized.includes(String(status)), false);
+    assert.equal(serialized.includes(token), false);
+    assert.equal(serialized.includes("worker.example"), false);
+  }
+});
+
+test("allowlists BFF network cause codes and discards raw errors", async () => {
+  const allowedCodes = [
+    "ENOTFOUND",
+    "EAI_AGAIN",
+    "ECONNRESET",
+    "ETIMEDOUT",
+    "CERT_HAS_EXPIRED",
+    "SELF_SIGNED_CERT_IN_CHAIN",
+    "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  ];
+
+  for (const causeCode of [...allowedCodes, token]) {
+    const validate = createCopilotWorkerHttpClient({
+      baseUrl: "https://worker.example",
+      hmacSecret: secret,
+      timeoutMs: 1_000,
+      fetchImpl: async () => {
+        throw {
+          message: `failed for ${token} at https://private.example`,
+          cause: { code: causeCode, headers: { authorization: token } },
+        };
+      },
+    });
+    const result = await validate(token, requestId);
+    const expectedCauseCode = allowedCodes.includes(causeCode)
+      ? causeCode
+      : undefined;
+
+    assert.deepEqual(result, {
+      ok: false,
+      requestId,
+      code: "unavailable",
+      diagnostic: {
+        event: "copilot_worker_transport_error",
+        requestId,
+        code: "WORKER_NETWORK_ERROR",
+        message: "copilot worker could not be reached",
+        ...(expectedCauseCode ? { causeCode: expectedCauseCode } : {}),
+      },
+    });
+    assert.equal(JSON.stringify(result).includes(token), false);
+    assert.equal(JSON.stringify(result).includes("private.example"), false);
+  }
+});
+
+test("uses one fixed diagnostic for malformed worker responses", async () => {
+  const responseFactories = [
+    () =>
+      new Response("x", {
+        status: 200,
+        headers: { "Content-Length": String(256 * 1024 + 1) },
+      }),
+    () => new Response("{", { status: 200 }),
+    () => new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    () =>
+      new Response(
+        JSON.stringify({
+          ok: false,
+          requestId: "d510ccb5-22af-47b5-9280-3b605aac4c69",
+          code: "unknown",
+        }),
+        { status: 200 }
+      ),
+  ];
+
+  for (const createResponse of responseFactories) {
+    const validate = createCopilotWorkerHttpClient({
+      baseUrl: "https://worker.example",
+      hmacSecret: secret,
+      timeoutMs: 1_000,
+      fetchImpl: async () => createResponse(),
+    });
+
+    assert.deepEqual(await validate(token, requestId), {
+      ok: false,
+      requestId,
+      code: "unknown",
+      diagnostic: {
+        event: "copilot_worker_transport_error",
+        requestId,
+        code: "WORKER_INVALID_RESPONSE",
+        message: "copilot worker returned an invalid response",
+      },
+    });
+  }
 });
 
 test("transports only a redacted diagnostic for unknown validation", async () => {
@@ -217,5 +420,11 @@ test("transports only allowlisted probe diagnostics for unavailable", async () =
     ok: false,
     requestId,
     code: "unknown",
+    diagnostic: {
+      event: "copilot_worker_transport_error",
+      requestId,
+      code: "WORKER_INVALID_RESPONSE",
+      message: "copilot worker returned an invalid response",
+    },
   });
 });

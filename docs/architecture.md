@@ -340,6 +340,15 @@ categoria de rede pode ainda incluir apenas um cause code da allowlist
 headers, body e texto remoto não atravessam o contrato. Um `unavailable`
 genérico continua sem diagnóstico.
 
+O cliente HMAC no BFF diagnostica separadamente a fronteira BFF→worker. Sem
+ler ou transportar body, headers, URL, status numérico ou exceção raw,
+classifica rejeição HMAC (`WORKER_AUTH_REJECTED`), rate limit, indisponibilidade
+HTTP, outro HTTP não-2xx, erro de rede, resposta inválida e timeout. Apenas
+`WORKER_NETWORK_ERROR` pode incluir um cause code da mesma allowlist curta.
+Estes diagnósticos só acompanham a resposta autenticada de revalidação, nunca
+são persistidos/listados/renderizados, e não alteram `unavailable`/`timeout`
+para um erro definitivo.
+
 O worker expõe apenas `GET /health` e `POST /v1/copilot/validate`, rejeita
 `Origin` e não envia headers CORS. `/health` é readiness: faz `PING` e um
 `SET NX PX` efémero e bounded, devolvendo `503` sem detalhes quando Redis não

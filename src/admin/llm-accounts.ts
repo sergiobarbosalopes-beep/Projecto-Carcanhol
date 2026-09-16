@@ -1,7 +1,7 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
-import type { SafeCopilotValidationDiagnostic } from "@/services/copilot-worker/src/contract";
+import type { SafeCopilotDiagnostic } from "@/services/copilot-worker/src/contract";
 import { AuthorizationError, requireAuthorizedUser } from "@/src/auth/server";
 import {
   getLlmCredentialError,
@@ -40,7 +40,7 @@ const PUBLIC_MODEL_COLUMNS =
 
 export type RevalidateLlmAccountResult = {
   account: LlmAccountPublic;
-  diagnostic?: SafeCopilotValidationDiagnostic;
+  diagnostic?: SafeCopilotDiagnostic;
 };
 
 const validationRequests = new Map<
@@ -304,7 +304,9 @@ async function revalidateLlmAccountOnce(
   return {
     account,
     ...(!validation.ok &&
-    (validation.code === "unknown" || validation.code === "unavailable") &&
+    (validation.code === "unknown" ||
+      validation.code === "unavailable" ||
+      validation.code === "timeout") &&
     validation.diagnostic
       ? { diagnostic: validation.diagnostic }
       : {}),

@@ -1,9 +1,13 @@
 import {
+  COPILOT_WORKER_TRANSPORT_DIAGNOSTICS,
   COPILOT_VALIDATION_PATH,
   COPILOT_WORKER_MAX_RESPONSE_BYTES,
   copilotValidationResponseSchema,
   type CopilotValidationResponse,
+  type CopilotWorkerTransportFailure,
+  type SafeNetworkCauseCode,
 } from "./contract";
+import { findSafeNetworkCauseCode } from "./network-error";
 import { createSignedWorkerHeaders } from "./request-auth";
 
 type WorkerHttpClientOptions = {
@@ -12,6 +16,9 @@ type WorkerHttpClientOptions = {
   timeoutMs: number;
   fetchImpl?: typeof fetch;
 };
+
+export type CopilotWorkerClientResult =
+  CopilotValidationResponse | CopilotWorkerTransportFailure;
 
 export function createCopilotWorkerHttpClient({
   baseUrl,
@@ -24,7 +31,7 @@ export function createCopilotWorkerHttpClient({
   return async function validate(
     token: string,
     requestId: string
-  ): Promise<CopilotValidationResponse> {
+  ): Promise<CopilotWorkerClientResult> {
     let body = JSON.stringify({ requestId, token });
     const headers = createSignedWorkerHeaders({
       body,
@@ -50,32 +57,122 @@ export function createCopilotWorkerHttpClient({
       });
 
       if (response.status === 504) {
-        return { ok: false, requestId, code: "timeout" };
+        return createTimeoutFailure(requestId);
       }
 
       if (!response.ok) {
-        return { ok: false, requestId, code: "unavailable" };
+        if (response.status === 401 || response.status === 403) {
+          return createUnavailableFailure(requestId, "authRejected");
+        }
+
+        if (response.status === 429) {
+          return createUnavailableFailure(requestId, "rateLimited");
+        }
+
+        if (response.status >= 500 && response.status <= 599) {
+          return createUnavailableFailure(requestId, "httpUnavailable");
+        }
+
+        return createUnavailableFailure(requestId, "httpError");
       }
 
-      const responseBody = await readBoundedResponse(response);
-      const parsed = copilotValidationResponseSchema.safeParse(
-        JSON.parse(responseBody)
-      );
+      try {
+        const responseBody = await readBoundedResponse(response);
+        const parsed = copilotValidationResponseSchema.safeParse(
+          JSON.parse(responseBody)
+        );
 
-      if (!parsed.success || parsed.data.requestId !== requestId) {
-        return { ok: false, requestId, code: "unknown" };
+        if (!parsed.success || parsed.data.requestId !== requestId) {
+          return createInvalidResponseFailure(requestId);
+        }
+
+        return parsed.data;
+      } catch (error) {
+        return isTimeoutError(error)
+          ? createTimeoutFailure(requestId)
+          : createInvalidResponseFailure(requestId);
       }
-
-      return parsed.data;
     } catch (error) {
-      return {
-        ok: false,
-        requestId,
-        code: isTimeoutError(error) ? "timeout" : "unavailable",
-      };
+      return isTimeoutError(error)
+        ? createTimeoutFailure(requestId)
+        : createUnavailableFailure(
+            requestId,
+            "networkError",
+            findSafeNetworkCauseCode(error)
+          );
     } finally {
       body = "";
     }
+  };
+}
+
+type WorkerUnavailableDiagnosticKind =
+  | "authRejected"
+  | "rateLimited"
+  | "httpUnavailable"
+  | "httpError"
+  | "networkError";
+
+function createUnavailableFailure(
+  requestId: string,
+  kind: WorkerUnavailableDiagnosticKind,
+  causeCode?: SafeNetworkCauseCode
+): CopilotWorkerTransportFailure {
+  const definition = COPILOT_WORKER_TRANSPORT_DIAGNOSTICS[kind];
+
+  if (kind === "networkError") {
+    return {
+      ok: false,
+      requestId,
+      code: "unavailable",
+      diagnostic: {
+        event: "copilot_worker_transport_error",
+        requestId,
+        ...definition,
+        ...(causeCode ? { causeCode } : {}),
+      },
+    };
+  }
+
+  return {
+    ok: false,
+    requestId,
+    code: "unavailable",
+    diagnostic: {
+      event: "copilot_worker_transport_error",
+      requestId,
+      ...definition,
+    },
+  };
+}
+
+function createInvalidResponseFailure(
+  requestId: string
+): CopilotWorkerTransportFailure {
+  return {
+    ok: false,
+    requestId,
+    code: "unknown",
+    diagnostic: {
+      event: "copilot_worker_transport_error",
+      requestId,
+      ...COPILOT_WORKER_TRANSPORT_DIAGNOSTICS.invalidResponse,
+    },
+  };
+}
+
+function createTimeoutFailure(
+  requestId: string
+): CopilotWorkerTransportFailure {
+  return {
+    ok: false,
+    requestId,
+    code: "timeout",
+    diagnostic: {
+      event: "copilot_worker_transport_error",
+      requestId,
+      ...COPILOT_WORKER_TRANSPORT_DIAGNOSTICS.timeout,
+    },
   };
 }
 

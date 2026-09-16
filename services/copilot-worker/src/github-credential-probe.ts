@@ -1,7 +1,7 @@
 import {
-  githubCredentialProbeNetworkCauseCodes,
-  type GitHubCredentialProbeNetworkCauseCode,
-} from "./contract";
+  findSafeNetworkCauseCode,
+  type SafeNetworkCauseCode,
+} from "./network-error";
 
 const GITHUB_USER_URL = "https://api.github.com/user";
 const GITHUB_ACCEPT = "application/vnd.github+json";
@@ -22,7 +22,7 @@ export type GitHubCredentialProbeResult =
   | {
       outcome: "unavailable";
       category: "network_error" | "rate_limited" | "github_unavailable";
-      causeCode?: GitHubCredentialProbeNetworkCauseCode;
+      causeCode?: SafeNetworkCauseCode;
     };
 
 export type GitHubCredentialProbe = (
@@ -82,60 +82,12 @@ export async function probeGitHubCredential(
       return { outcome: "timeout" };
     }
 
-    const causeCode = findAllowedNetworkCauseCode(error);
+    const causeCode = findSafeNetworkCauseCode(error);
 
     return {
       outcome: "unavailable",
       category: "network_error",
       ...(causeCode ? { causeCode } : {}),
     };
-  }
-}
-
-function findAllowedNetworkCauseCode(
-  error: unknown
-): GitHubCredentialProbeNetworkCauseCode | undefined {
-  let current = error;
-
-  for (let depth = 0; depth < 4 && current; depth += 1) {
-    const record = asRecord(current);
-
-    if (!record) {
-      return undefined;
-    }
-
-    const code = readProperty(record, "code");
-
-    if (typeof code === "string") {
-      const normalizedCode = code.toUpperCase();
-      const allowedCode = githubCredentialProbeNetworkCauseCodes.find(
-        (candidate) => candidate === normalizedCode
-      );
-
-      if (allowedCode) {
-        return allowedCode;
-      }
-    }
-
-    current = readProperty(record, "cause");
-  }
-
-  return undefined;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function readProperty(
-  record: Record<string, unknown>,
-  property: string
-): unknown {
-  try {
-    return Reflect.get(record, property);
-  } catch {
-    return undefined;
   }
 }

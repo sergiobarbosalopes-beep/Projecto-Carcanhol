@@ -6,6 +6,12 @@ import {
   isSafeDiagnosticIdentifier,
   isSafeDiagnosticMessage,
 } from "./diagnostic-safety";
+import { safeNetworkCauseCodes } from "./network-error";
+
+export {
+  safeNetworkCauseCodes,
+  type SafeNetworkCauseCode,
+} from "./network-error";
 
 export const COPILOT_VALIDATION_PATH = "/v1/copilot/validate";
 export const COPILOT_HEALTH_PATH = "/health";
@@ -41,19 +47,6 @@ const classifiedCopilotValidationErrorCodes = [
   "timeout",
   "no_models",
 ] as const;
-
-export const githubCredentialProbeNetworkCauseCodes = [
-  "ENOTFOUND",
-  "EAI_AGAIN",
-  "ECONNRESET",
-  "ETIMEDOUT",
-  "CERT_HAS_EXPIRED",
-  "SELF_SIGNED_CERT_IN_CHAIN",
-  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
-] as const;
-
-export type GitHubCredentialProbeNetworkCauseCode =
-  (typeof githubCredentialProbeNetworkCauseCodes)[number];
 
 const diagnosticIdentifierSchema = z
   .string()
@@ -111,7 +104,7 @@ export const safeCopilotUnavailableDiagnosticSchema = z.discriminatedUnion(
         ...probeUnavailableDiagnosticBase,
         code: z.literal("GITHUB_CREDENTIAL_PROBE_NETWORK_ERROR"),
         message: z.literal("github credential probe could not reach GitHub"),
-        causeCode: z.enum(githubCredentialProbeNetworkCauseCodes).optional(),
+        causeCode: z.enum(safeNetworkCauseCodes).optional(),
       })
       .strict(),
     z
@@ -137,6 +130,178 @@ export type SafeCopilotUnavailableDiagnostic = z.infer<
 
 export type SafeCopilotValidationDiagnostic =
   SafeUnknownCopilotErrorDiagnostic | SafeCopilotUnavailableDiagnostic;
+
+export const COPILOT_WORKER_TRANSPORT_DIAGNOSTICS = {
+  authRejected: {
+    code: "WORKER_AUTH_REJECTED",
+    message: "copilot worker rejected request authentication",
+  },
+  rateLimited: {
+    code: "WORKER_RATE_LIMITED",
+    message: "copilot worker rate limited the request",
+  },
+  httpUnavailable: {
+    code: "WORKER_HTTP_UNAVAILABLE",
+    message: "copilot worker returned an unavailable response",
+  },
+  httpError: {
+    code: "WORKER_HTTP_ERROR",
+    message: "copilot worker returned an unexpected HTTP response",
+  },
+  networkError: {
+    code: "WORKER_NETWORK_ERROR",
+    message: "copilot worker could not be reached",
+  },
+  invalidResponse: {
+    code: "WORKER_INVALID_RESPONSE",
+    message: "copilot worker returned an invalid response",
+  },
+  timeout: {
+    code: "WORKER_TIMEOUT",
+    message: "copilot worker request timed out",
+  },
+} as const;
+
+const workerTransportDiagnosticBase = {
+  event: z.literal("copilot_worker_transport_error"),
+  requestId: z.string().uuid(),
+};
+
+const workerAuthRejectedDiagnosticSchema = z
+  .object({
+    ...workerTransportDiagnosticBase,
+    code: z.literal(COPILOT_WORKER_TRANSPORT_DIAGNOSTICS.authRejected.code),
+    message: z.literal(
+      COPILOT_WORKER_TRANSPORT_DIAGNOSTICS.authRejected.message
+    ),
+  })
+  .strict();
+
+const workerRateLimitedDiagnosticSchema = z
+  .object({
+    ...workerTransportDiagnosticBase,
+    code: z.literal(COPILOT_WORKER_TRANSPORT_DIAGNOSTICS.rateLimited.code),
+    message: z.literal(
+      COPILOT_WORKER_TRANSPORT_DIAGNOSTICS.rateLimited.message
+    ),
+  })
+  .strict();
+
+const workerHttpUnavailableDiagnosticSchema = z
+  .object({
+    ...workerTransportDiagnosticBase,
+    code: z.literal(COPILOT_WORKER_TRANSPORT_DIAGNOSTICS.httpUnavailable.code),
+    message: z.literal(
+      COPILOT_WORKER_TRANSPORT_DIAGNOSTICS.httpUnavailable.message
+    ),
+  })
+  .strict();
+
+const workerHttpErrorDiagnosticSchema = z
+  .object({
+    ...workerTransportDiagnosticBase,
+    code: z.literal(COPILOT_WORKER_TRANSPORT_DIAGNOSTICS.httpError.code),
+    message: z.literal(COPILOT_WORKER_TRANSPORT_DIAGNOSTICS.httpError.message),
+  })
+  .strict();
+
+const workerNetworkErrorDiagnosticSchema = z
+  .object({
+    ...workerTransportDiagnosticBase,
+    code: z.literal(COPILOT_WORKER_TRANSPORT_DIAGNOSTICS.networkError.code),
+    message: z.literal(
+      COPILOT_WORKER_TRANSPORT_DIAGNOSTICS.networkError.message
+    ),
+    causeCode: z.enum(safeNetworkCauseCodes).optional(),
+  })
+  .strict();
+
+const workerInvalidResponseDiagnosticSchema = z
+  .object({
+    ...workerTransportDiagnosticBase,
+    code: z.literal(COPILOT_WORKER_TRANSPORT_DIAGNOSTICS.invalidResponse.code),
+    message: z.literal(
+      COPILOT_WORKER_TRANSPORT_DIAGNOSTICS.invalidResponse.message
+    ),
+  })
+  .strict();
+
+const workerTimeoutDiagnosticSchema = z
+  .object({
+    ...workerTransportDiagnosticBase,
+    code: z.literal(COPILOT_WORKER_TRANSPORT_DIAGNOSTICS.timeout.code),
+    message: z.literal(COPILOT_WORKER_TRANSPORT_DIAGNOSTICS.timeout.message),
+  })
+  .strict();
+
+const workerUnavailableTransportDiagnosticSchema = z.union([
+  workerAuthRejectedDiagnosticSchema,
+  workerRateLimitedDiagnosticSchema,
+  workerHttpUnavailableDiagnosticSchema,
+  workerHttpErrorDiagnosticSchema,
+  workerNetworkErrorDiagnosticSchema,
+]);
+
+export const safeCopilotWorkerTransportDiagnosticSchema = z.discriminatedUnion(
+  "code",
+  [
+    workerAuthRejectedDiagnosticSchema,
+    workerRateLimitedDiagnosticSchema,
+    workerHttpUnavailableDiagnosticSchema,
+    workerHttpErrorDiagnosticSchema,
+    workerNetworkErrorDiagnosticSchema,
+    workerInvalidResponseDiagnosticSchema,
+    workerTimeoutDiagnosticSchema,
+  ]
+);
+
+export type SafeCopilotWorkerTransportDiagnostic = z.infer<
+  typeof safeCopilotWorkerTransportDiagnosticSchema
+>;
+
+export type SafeCopilotDiagnostic =
+  SafeCopilotValidationDiagnostic | SafeCopilotWorkerTransportDiagnostic;
+
+export const copilotWorkerTransportFailureSchema = z
+  .union([
+    z
+      .object({
+        ok: z.literal(false),
+        requestId: z.string().uuid(),
+        code: z.literal("unavailable"),
+        diagnostic: workerUnavailableTransportDiagnosticSchema,
+      })
+      .strict(),
+    z
+      .object({
+        ok: z.literal(false),
+        requestId: z.string().uuid(),
+        code: z.literal("unknown"),
+        diagnostic: workerInvalidResponseDiagnosticSchema,
+      })
+      .strict(),
+    z
+      .object({
+        ok: z.literal(false),
+        requestId: z.string().uuid(),
+        code: z.literal("timeout"),
+        diagnostic: workerTimeoutDiagnosticSchema,
+      })
+      .strict(),
+  ])
+  .superRefine((value, context) => {
+    if (value.diagnostic.requestId !== value.requestId) {
+      context.addIssue({
+        code: "custom",
+        path: ["diagnostic", "requestId"],
+        message: "Diagnostic requestId must match the response requestId.",
+      });
+    }
+  });
+
+export type CopilotWorkerTransportFailure = z.infer<
+  typeof copilotWorkerTransportFailureSchema
+>;
 
 const boundedLabelSchema = z
   .string()
