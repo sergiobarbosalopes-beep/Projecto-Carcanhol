@@ -286,7 +286,9 @@ O child nativo recebe apenas `HOME`/`TMP*` apontados ao diretório efémero,
 provenientes do ambiente do container (`HTTP(S)_PROXY`, `NO_PROXY`,
 `NODE_EXTRA_CA_CERTS`, `SSL_CERT_*`) não são herdados, evitando que o
 transporte Rust/reqwest tente interpretar configuração destinada ao processo
-Node.
+Node. A imagem runtime instala explicitamente `ca-certificates`, e o CI exige
+que `/etc/ssl/certs/ca-certificates.crt` exista e não esteja vazio antes de
+aceitar o container.
 
 ```text
 Browser

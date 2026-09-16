@@ -196,6 +196,32 @@ test("pins the SDK and configures empty mode without logged-in fallback", () => 
   );
 });
 
+test("installs and verifies the native runtime CA bundle", () => {
+  const dockerfile = readFileSync(
+    new URL("../Dockerfile.vercel", import.meta.url),
+    "utf8"
+  );
+  const workflow = readFileSync(
+    new URL("../../../.github/workflows/ci.yml", import.meta.url),
+    "utf8"
+  );
+  const runtimeStage = dockerfile.indexOf(
+    "FROM node:24.12.0-bookworm-slim AS runtime"
+  );
+  const caInstall = dockerfile.indexOf(
+    "apt-get install -y --no-install-recommends ca-certificates",
+    runtimeStage
+  );
+  const nodeUser = dockerfile.indexOf("USER node", runtimeStage);
+
+  assert.notEqual(runtimeStage, -1);
+  assert.equal(caInstall > runtimeStage, true);
+  assert.equal(nodeUser > caInstall, true);
+  assert.match(dockerfile, /rm -rf \/var\/lib\/apt\/lists\/\*/);
+  assert.match(workflow, /--tag carcanhol-copilot-worker:ci/);
+  assert.match(workflow, /test -s \/etc\/ssl\/certs\/ca-certificates\.crt/);
+});
+
 test("builds a request-bound empty session without a model or tools", () => {
   const token = `github_pat_${"A".repeat(40)}`;
   const sessionId = "3bebcccd-5254-40f8-809f-3a14579dba46";

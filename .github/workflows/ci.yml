@@ -41,7 +41,10 @@ jobs:
         run: npm run worker:build
 
       - name: Build Copilot worker container
-        run: docker build --file services/copilot-worker/Dockerfile.vercel services/copilot-worker
+        run: docker build --tag carcanhol-copilot-worker:ci --file services/copilot-worker/Dockerfile.vercel services/copilot-worker
+
+      - name: Verify Copilot worker CA bundle
+        run: docker run --rm --entrypoint /bin/sh carcanhol-copilot-worker:ci -c 'test -s /etc/ssl/certs/ca-certificates.crt'
 
       - name: Build
         run: npm run build

@@ -303,9 +303,11 @@ controlar redirects e aplicar timeouts e limites de resposta contra SSRF.
 
 O worker está em `services/copilot-worker`, fixa
 `@github/copilot-sdk@1.0.14` (Copilot CLI 1.0.85) e Node 24 no
-`Dockerfile.vercel`. O CI instala o
-lockfile separado, testa/builda o worker e constrói a imagem. A aplicação
-Next.js não depende do pacote SDK nem o inclui nas Functions.
+`Dockerfile.vercel`. O stage runtime instala explicitamente
+`ca-certificates`; o CI instala o lockfile separado, testa/builda o worker,
+constrói a imagem e verifica que `/etc/ssl/certs/ca-certificates.crt` existe e
+não está vazio. A aplicação Next.js não depende do pacote SDK nem o inclui nas
+Functions.
 
 Vercel Services e custom containers estão em **beta**. O ficheiro
 `deploy/vercel.services.example.json` documenta a topologia recomendada:

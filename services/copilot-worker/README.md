@@ -169,6 +169,12 @@ Construir a partir desta pasta:
 docker build -f Dockerfile.vercel .
 ```
 
+O stage runtime instala explicitamente `ca-certificates` antes de mudar para
+`USER node`. O CI constrói a imagem e exige que
+`/etc/ssl/certs/ca-certificates.crt` exista e não esteja vazio; o runtime
+nativo Rust necessita deste trust store mesmo quando o `fetch` do processo
+Node funciona.
+
 Não configurar `SUPABASE_SERVICE_ROLE_KEY`,
 `LLM_CREDENTIAL_ENCRYPTION_KEY` ou credenciais de utilizador no serviço. Para
 Vercel Services, consultar `deploy/vercel.services.example.json` e a secção de
