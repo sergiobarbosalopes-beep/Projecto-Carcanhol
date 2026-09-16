@@ -6,7 +6,7 @@ Serviço Node.js isolado que executa apenas duas operações:
   `200 {"status":"ok"}` ou `503 {"status":"unavailable"}` sem versão ou
   detalhes internos;
 - `POST /v1/copilot/validate` autentica um pedido HMAC e usa
-  `@github/copilot-sdk@1.0.13` para `start()` + sessão efémera +
+  `@github/copilot-sdk@1.0.14` (Copilot CLI 1.0.85) para `start()` + sessão efémera +
   `session.rpc.model.list({})` + cleanup + `stop()`.
 
 Não aceita prompts, tools ou pedidos de browser. O runtime usa
@@ -22,7 +22,7 @@ pública tipada `session.rpc.model.list({})` e devolve `result.list`. Esta RPC
 usa o auth/integration context da sessão e é a validação autoritativa da
 identidade, entitlement, política e modelos. Em `finally`, o worker executa
 `session.disconnect()` + `client.deleteSession(sessionId)`; `client.stop()` e a
-remoção do diretório temporário permanecem como cleanup final. O SDK 1.0.13 não tipa uma
+remoção do diretório temporário permanecem como cleanup final. O SDK 1.0.14 não tipa uma
 categoria de erro específica para `models.list`; quando `ResponseError.data`
 traz `code`/status estruturados, estes têm prioridade. Um `ResponseError` sem
 categoria só é classificado como `invalid_token` quando contém a combinação

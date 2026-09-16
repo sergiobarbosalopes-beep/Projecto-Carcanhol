@@ -43,7 +43,7 @@ Next.js 16 App Router / Vercel
          ▼
       Copilot validation worker / Node 24 container
         ├─ endpoint estrito validate/listModels
-        ├─ @github/copilot-sdk 1.0.13, mode: empty
+        ├─ @github/copilot-sdk 1.0.14 / CLI 1.0.85, mode: empty
         ├─ sem prompts, sessões ou tools
         └─ timeout, concorrência e replay bounded
   │
@@ -257,7 +257,7 @@ em `inactive`; a ativação posterior é explícita.
 ### GitHub Copilot
 
 O GitHub Models foi retirado em 30 de julho de 2026. A integração usa
-`@github/copilot-sdk@1.0.13`, cujo runtime requer Node
+`@github/copilot-sdk@1.0.14` (Copilot CLI 1.0.85), cujo runtime requer Node
 `^20.19.0 || >=22.12.0`; o container fixa Node 24. A validação cria uma sessão
 efémera request-bound com `SessionConfig.gitHubToken`, omite o modelo e chama a
 RPC pública tipada `session.rpc.model.list({})`, sem enviar prompt.

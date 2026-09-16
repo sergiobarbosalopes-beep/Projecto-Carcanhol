@@ -302,7 +302,8 @@ controlar redirects e aplicar timeouts e limites de resposta contra SSRF.
 ## Deploy do worker
 
 O worker está em `services/copilot-worker`, fixa
-`@github/copilot-sdk@1.0.13` e Node 24 no `Dockerfile.vercel`. O CI instala o
+`@github/copilot-sdk@1.0.14` (Copilot CLI 1.0.85) e Node 24 no
+`Dockerfile.vercel`. O CI instala o
 lockfile separado, testa/builda o worker e constrói a imagem. A aplicação
 Next.js não depende do pacote SDK nem o inclui nas Functions.
 
@@ -333,7 +334,7 @@ origem exata. O worker recusa arrancar em produção sem o store partilhado.
 - [Retirada do GitHub Models](https://docs.github.com/en/github-models);
 - [Autenticação do GitHub Copilot SDK](https://docs.github.com/en/copilot/how-tos/copilot-sdk/auth/authenticate);
 - [Criação do fine-grained PAT para Copilot](https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli);
-- [GitHub Copilot SDK v1.0.13](https://github.com/github/copilot-sdk/tree/v1.0.13);
+- [GitHub Copilot SDK v1.0.14](https://github.com/github/copilot-sdk/tree/v1.0.14);
 - [Vercel Services](https://vercel.com/kb/guide/vercel-services);
 - [Vercel service bindings](https://vercel.com/docs/services/bindings);
 - [Vercel container images](https://vercel.com/docs/functions/container-images);

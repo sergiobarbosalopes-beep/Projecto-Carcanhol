@@ -156,12 +156,23 @@ test("pins the SDK and configures empty mode without logged-in fallback", () => 
   const packageJson = JSON.parse(
     readFileSync(new URL("../package.json", import.meta.url), "utf8")
   );
+  const sdkPackageJson = JSON.parse(
+    readFileSync(
+      new URL(
+        "../node_modules/@github/copilot-sdk/package.json",
+        import.meta.url
+      ),
+      "utf8"
+    )
+  );
   const adapter = readFileSync(
     new URL("../src/copilot-adapter.ts", import.meta.url),
     "utf8"
   );
 
-  assert.equal(packageJson.dependencies["@github/copilot-sdk"], "1.0.13");
+  assert.equal(packageJson.dependencies["@github/copilot-sdk"], "1.0.14");
+  assert.equal(sdkPackageJson.version, "1.0.14");
+  assert.equal(sdkPackageJson.copilotCliVersion, "1.0.85");
   assert.match(adapter, /mode: "empty"/);
   assert.match(adapter, /useLoggedInUser: false/);
   assert.match(adapter, /logLevel: "none"/);
