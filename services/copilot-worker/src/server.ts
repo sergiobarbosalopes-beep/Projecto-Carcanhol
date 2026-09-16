@@ -6,15 +6,19 @@ import {
 import {
   COPILOT_HEALTH_PATH,
   COPILOT_INFERENCE_PATH,
+  COPILOT_STREAM_PATH,
   COPILOT_VALIDATION_PATH,
   COPILOT_WORKER_HEADERS,
   COPILOT_WORKER_MAX_BODY_BYTES,
+  COPILOT_WORKER_MAX_RESPONSE_BYTES,
   copilotInferenceRequestSchema,
   copilotInferenceResponseSchema,
+  copilotStreamEventSchema,
   copilotValidationRequestSchema,
   copilotValidationResponseSchema,
   type CopilotInferenceRequest,
   type CopilotInferenceResponse,
+  type CopilotStreamEvent,
   type CopilotValidationRequest,
   type CopilotValidationResponse,
   type CopilotWorkerRequestPhase,
@@ -41,6 +45,11 @@ export type CopilotWorkerServerOptions = {
     request: CopilotInferenceRequest,
     signal: AbortSignal
   ) => Promise<CopilotInferenceResponse>;
+  inferStream?: (
+    request: CopilotInferenceRequest,
+    signal: AbortSignal,
+    emit: (event: CopilotStreamEvent) => Promise<void>
+  ) => Promise<void>;
   maxClockSkewMs?: number;
   maxConcurrency?: number;
   maxQueue?: number;
@@ -124,11 +133,13 @@ async function handleRequest(
 
   const isValidation = url.pathname === COPILOT_VALIDATION_PATH;
   const isInference = url.pathname === COPILOT_INFERENCE_PATH;
+  const isStream = url.pathname === COPILOT_STREAM_PATH;
 
   if (
     request.method !== "POST" ||
-    (!isValidation && !isInference) ||
+    (!isValidation && !isInference && !isStream) ||
     (isInference && !options.infer) ||
+    (isStream && !options.inferStream) ||
     url.search
   ) {
     options.writeResponse(response, 404, { error: "Not found." });
@@ -181,17 +192,17 @@ async function handleRequest(
   }
 
   const controller = new AbortController();
-  const abortForDisconnect = () => controller.abort();
+  const abortForDisconnect = () => controller.abort("disconnect");
   const abortForClosedResponse = () => {
     if (!response.writableEnded) {
-      controller.abort();
+      controller.abort("disconnect");
     }
   };
   request.once("aborted", abortForDisconnect);
   response.once("close", abortForClosedResponse);
   const deadline = setTimeout(
-    () => controller.abort(),
-    isInference
+    () => controller.abort("deadline"),
+    isInference || isStream
       ? (options.inferenceDeadlineMs ?? 20_000)
       : (options.validationDeadlineMs ?? 15_000)
   );
@@ -241,7 +252,7 @@ async function handleRequest(
 
     let validatedResult: CopilotValidationResponse | CopilotInferenceResponse;
 
-    if (isInference) {
+    if (isInference || isStream) {
       const parsed = copilotInferenceRequestSchema.safeParse(input);
 
       if (
@@ -256,6 +267,22 @@ async function handleRequest(
 
       parsedRequest = parsed.data;
       phase = "validating";
+
+      if (isStream) {
+        phase = "streaming_response";
+        await options.gate.run(
+          () =>
+            streamInferenceResponse(
+              response,
+              parsed.data,
+              controller.signal,
+              options
+            ),
+          controller.signal
+        );
+        return;
+      }
+
       const result = await options.gate.run(
         () => options.infer!(parsed.data, controller.signal),
         controller.signal
@@ -292,11 +319,19 @@ async function handleRequest(
       options.writeResponse(response, 200, validatedResult);
     }
   } catch (error) {
-    if (phase === "writing_response" && authenticated && parsedRequest) {
+    if (
+      (phase === "writing_response" || phase === "streaming_response") &&
+      authenticated &&
+      parsedRequest
+    ) {
       emitInternalDiagnostic(options, parsedRequest.requestId, phase);
 
       if (!response.destroyed) {
-        response.destroy();
+        if (response.headersSent && !response.writableEnded) {
+          response.end();
+        } else {
+          response.destroy();
+        }
       }
 
       return;
@@ -398,6 +433,115 @@ async function handleRequest(
         parsedRequest.prompt = "";
         parsedRequest.systemPrompt = undefined;
       }
+    }
+  }
+}
+
+async function streamInferenceResponse(
+  response: ServerResponse,
+  request: CopilotInferenceRequest,
+  signal: AbortSignal,
+  options: CopilotWorkerServerOptions
+) {
+  response.statusCode = 200;
+  response.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+  response.setHeader("Cache-Control", "no-store, no-transform");
+  response.setHeader("X-Accel-Buffering", "no");
+  response.flushHeaders();
+  let totalBytes = 0;
+  let terminalSent = false;
+  let sequence = 0;
+  let writeChain = Promise.resolve();
+
+  const emit = async (candidate: CopilotStreamEvent) => {
+    const parsed = copilotStreamEventSchema.safeParse(candidate);
+
+    if (
+      !parsed.success ||
+      parsed.data.requestId !== request.requestId ||
+      terminalSent
+    ) {
+      throw new Error("Invalid stream event.");
+    }
+
+    if (parsed.data.type === "delta") {
+      if (parsed.data.sequence !== sequence + 1) {
+        throw new Error("Out-of-order stream event.");
+      }
+      sequence = parsed.data.sequence;
+    }
+
+    if (parsed.data.type === "done" || parsed.data.type === "error") {
+      terminalSent = true;
+    }
+
+    const frame = `${JSON.stringify(parsed.data)}\n`;
+    totalBytes += Buffer.byteLength(frame);
+
+    if (totalBytes > COPILOT_WORKER_MAX_RESPONSE_BYTES) {
+      throw new Error("Stream exceeded response limit.");
+    }
+
+    writeChain = writeChain.then(async () => {
+      if (!response.write(frame)) {
+        await new Promise<void>((resolve, reject) => {
+          const onDrain = () => {
+            response.removeListener("close", onClose);
+            resolve();
+          };
+          const onClose = () => {
+            response.removeListener("drain", onDrain);
+            reject(new WorkerAbortedError("Response closed."));
+          };
+          response.once("drain", onDrain);
+          response.once("close", onClose);
+        });
+      }
+    });
+    await writeChain;
+  };
+  const heartbeat = setInterval(() => {
+    if (!terminalSent && !response.destroyed && !response.writableEnded) {
+      void emit({
+        v: 1,
+        type: "heartbeat",
+        requestId: request.requestId,
+      }).catch(() => undefined);
+    }
+  }, 10_000);
+  heartbeat.unref?.();
+
+  try {
+    await options.inferStream!(request, signal, emit);
+
+    if (!terminalSent) {
+      await emit({
+        v: 1,
+        type: "error",
+        requestId: request.requestId,
+        code: signal.aborted ? "cancelled" : "invalid_response",
+      });
+    }
+  } catch {
+    if (!terminalSent && !response.destroyed && !response.writableEnded) {
+      await emit({
+        v: 1,
+        type: "error",
+        requestId: request.requestId,
+        code:
+          signal.reason === "deadline"
+            ? "timeout"
+            : signal.aborted
+              ? "cancelled"
+              : "invalid_response",
+      }).catch(() => undefined);
+    }
+  } finally {
+    clearInterval(heartbeat);
+    await writeChain.catch(() => undefined);
+
+    if (!response.destroyed && !response.writableEnded) {
+      response.end();
     }
   }
 }

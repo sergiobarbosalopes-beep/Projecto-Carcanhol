@@ -4,18 +4,19 @@ Aplicação Next.js de apoio à decisão de investimento, preparada para combina
 dados financeiros reais com análise assistida por IA. A arquitetura completa
 está em [`docs/architecture.md`](docs/architecture.md).
 
-**Estado atual: Fase 3E — criação de Skills com IA.** A aplicação inclui
+**Estado atual: Fase 4 — Chat base.** A aplicação inclui
 autenticação server-side, navegação protegida, gestão de conta, premissas
 globais, Skills manuais e configuração segura de várias contas LLM por
 utilizador. Contas GitHub Copilot são autenticadas num worker isolado antes de
 serem persistidas, o catálogo de modelos é sincronizado, uma combinação
 conta+modelo pode ser escolhida como predefinição global e a utilização
 account-wide disponibilizada pelo GitHub Copilot é atualizada através do SDK.
-Inclui ainda criação assistida de Skills através do canal de inferência
-one-shot: a IA propõe nome, descrição semanticamente útil e Markdown, mas o
-utilizador tem sempre de aplicar a proposta ao formulário e guardá-la
-explicitamente. Pedido, resposta e sessão não são persistidos. Pesquisa, Chat
-e Análises continuam sem geração LLM integrada nem dados financeiros.
+Inclui criação assistida de Skills através do canal de inferência one-shot e
+Chat textual persistente por utilizador, com streaming progressivo real,
+cancelamento, retry idempotente, seleção de conta/modelo por conversa e Skills
+manuais ou sugeridas com confirmação. Tools e Agentes aparecem apenas como
+estados vazios e não têm opções nem execução. Pesquisa, Análises e dados
+financeiros continuam fora do âmbito.
 
 ## Stack
 
@@ -45,8 +46,12 @@ triggers globais em `auth.users` e não concedem membership automaticamente.
   - **Premissas:** uma versão atual de texto livre das premissas globais, até
     20 000 caracteres;
   - **Conta:** email atual e alteração de palavra-passe via Supabase Auth;
-- repositório server-only para a futura integração LLM, limitado a Skills
-  `active`;
+- resolução server-only de Skills `active` para contexto textual delimitado;
+- Chat responsivo com conversas RLS, rename/delete cascade, respostas
+  progressivas canceláveis e estados completos/cancelados/falhados explícitos;
+- seletor de Skills por conversa, manual ou automático confirmado, e auditoria
+  por resposta com ID, nome, `updated_at` usado como versão e SHA-256 do
+  conteúdo; Tools/Agentes não são executáveis;
 - credenciais LLM cifradas no backend com AES-256-GCM e persistidas numa tabela
   separada, acessível apenas à service role.
 
@@ -73,6 +78,7 @@ app/
     admin/skills/              CRUD e lifecycle de Skills
     admin/llm-accounts/        Criação/revalidação e rotação de contas LLM
     llm/infer/                 Probe genérico de inferência one-shot
+    chat/                      Conversas, sugestões e stream NDJSON
     admin/skills/generate/     Proposta estruturada de Skill com IA
 services/
   copilot-worker/              Runtime SDK isolado, HTTP/HMAC e container
@@ -84,6 +90,7 @@ src/
   http/                        Respostas no-store e proteção same-origin
   middleware/                  Refresh de sessão e redireção antecipada
   security/                    Envelope AES-256-GCM das credenciais LLM
+  chat/                        Contratos, persistência e contexto seguro
   types/                       Tipos manuais do schema carcanhol
 database/migrations/
   0001_init_carcanhol_schema.sql
@@ -94,6 +101,7 @@ database/migrations/
   0006_preserve_transient_validation_catalog.sql
   0007_llm_defaults_and_provider_quota.sql
   0008_llm_inference_default.sql
+  0009_chat_base.sql
 docs/architecture.md
 ```
 
@@ -155,6 +163,7 @@ docs/architecture.md
    6. `database/migrations/0006_preserve_transient_validation_catalog.sql`.
    7. `database/migrations/0007_llm_defaults_and_provider_quota.sql`.
    8. `database/migrations/0008_llm_inference_default.sql`.
+   9. `database/migrations/0009_chat_base.sql`.
 
    A segunda migration cria `carcanhol.global_assumptions`,
    `carcanhol.skills`, índices, triggers locais de `updated_at`, a proteção
@@ -177,6 +186,10 @@ docs/architecture.md
    A oitava adiciona a RPC service-only que volta a confirmar atomicamente a
    predefinição selecionada sob RLS pelo BFF, a conta ativa, a última validação
    bem-sucedida e o modelo não stale antes de devolver o envelope cifrado.
+   A nona cria conversas e mensagens próprias com RLS e delete cascade, RPCs
+   transacionais/idempotentes para iniciar, repetir e finalizar turnos e a
+   resolução service-only do modelo efetivamente escolhido. Não deve ser
+   aplicada em produção sem autorização explícita.
 
 4. Em **Project Settings → API → Exposed schemas**, adicionar `carcanhol`.
 

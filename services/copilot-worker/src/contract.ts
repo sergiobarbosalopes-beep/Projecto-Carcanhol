@@ -15,6 +15,7 @@ export {
 
 export const COPILOT_VALIDATION_PATH = "/v1/copilot/validate";
 export const COPILOT_INFERENCE_PATH = "/v1/copilot/infer";
+export const COPILOT_STREAM_PATH = "/v1/copilot/stream";
 export const COPILOT_HEALTH_PATH = "/health";
 export const COPILOT_WORKER_MAX_BODY_BYTES = 24 * 1024;
 export const COPILOT_WORKER_MAX_RESPONSE_BYTES = 512 * 1024;
@@ -23,6 +24,8 @@ export const COPILOT_TOKEN_MAX_LENGTH = 4096;
 export const COPILOT_INFERENCE_MAX_PROMPT_LENGTH = 8_000;
 export const COPILOT_INFERENCE_MAX_SYSTEM_PROMPT_LENGTH = 8_000;
 export const COPILOT_INFERENCE_MAX_TEXT_LENGTH = 110_000;
+export const COPILOT_STREAM_PROTOCOL_VERSION = 1;
+export const COPILOT_STREAM_MAX_DELTA_LENGTH = 16_000;
 export const COPILOT_QUOTA_ERROR_CODES = [
   "provider_quota_unavailable",
   "provider_quota_not_available",
@@ -185,6 +188,7 @@ export const copilotWorkerRequestPhases = [
   "parsing_request",
   "validating",
   "validating_response",
+  "streaming_response",
   "writing_response",
 ] as const;
 
@@ -536,7 +540,7 @@ export type CopilotInferenceRequest = z.infer<
   typeof copilotInferenceRequestSchema
 >;
 
-const inferenceUsageSchema = z
+export const inferenceUsageSchema = z
   .object({
     inputTokens: z.number().int().nonnegative().max(10_000_000),
     outputTokens: z.number().int().nonnegative().max(10_000_000),
@@ -579,6 +583,52 @@ export const copilotInferenceResponseSchema = z.union([
 export type CopilotInferenceResponse = z.infer<
   typeof copilotInferenceResponseSchema
 >;
+
+export const copilotStreamEventSchema = z.discriminatedUnion("type", [
+  z
+    .object({
+      v: z.literal(COPILOT_STREAM_PROTOCOL_VERSION),
+      type: z.literal("start"),
+      requestId: z.string().uuid(),
+    })
+    .strict(),
+  z
+    .object({
+      v: z.literal(COPILOT_STREAM_PROTOCOL_VERSION),
+      type: z.literal("delta"),
+      requestId: z.string().uuid(),
+      sequence: z.number().int().positive().max(1_000_000),
+      text: z.string().min(1).max(COPILOT_STREAM_MAX_DELTA_LENGTH),
+    })
+    .strict(),
+  z
+    .object({
+      v: z.literal(COPILOT_STREAM_PROTOCOL_VERSION),
+      type: z.literal("done"),
+      requestId: z.string().uuid(),
+      text: z.string().min(1).max(COPILOT_INFERENCE_MAX_TEXT_LENGTH),
+      usage: inferenceUsageSchema.optional(),
+      durationMs: z.number().int().nonnegative().max(120_000),
+    })
+    .strict(),
+  z
+    .object({
+      v: z.literal(COPILOT_STREAM_PROTOCOL_VERSION),
+      type: z.literal("error"),
+      requestId: z.string().uuid(),
+      code: z.enum(["cancelled", "timeout", "unavailable", "invalid_response"]),
+    })
+    .strict(),
+  z
+    .object({
+      v: z.literal(COPILOT_STREAM_PROTOCOL_VERSION),
+      type: z.literal("heartbeat"),
+      requestId: z.string().uuid(),
+    })
+    .strict(),
+]);
+
+export type CopilotStreamEvent = z.infer<typeof copilotStreamEventSchema>;
 
 const successfulValidationSchema = z
   .object({

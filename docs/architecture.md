@@ -1,7 +1,7 @@
 # Arquitetura — Projecto Carcanhol
 
-Versão: 3.5
-Estado: Fase 3E implementada
+Versão: 4.0
+Estado: Fase 4 implementada
 
 ## 1. Objetivo e âmbito atual
 
@@ -10,7 +10,7 @@ de investimentos. A arquitetura futura combinará dados financeiros reais,
 contexto macroeconómico e um agente LLM com tools. O LLM nunca será a fonte
 primária de preços/fundamentais nem executará transações.
 
-A Fase 3B acrescenta validação real à fundação de produto e administração:
+A Fase 4 acrescenta Chat textual à fundação de produto e administração:
 
 - shell responsivo e navegação protegida;
 - autenticação e membership server-side;
@@ -23,11 +23,15 @@ A Fase 3B acrescenta validação real à fundação de produto e administração
 - predefinição global atómica de uma combinação conta+modelo por utilizador;
 - utilização account-wide do GitHub Copilot, isolada da telemetria de sessões;
 - inferência one-shot autenticada para propostas de Skills, sem persistência;
-- envelopes AES-256-GCM de credenciais numa tabela service-only;
-- contrato server-only para carregar futuramente Skills ativas.
+- conversas e mensagens persistentes por utilizador, protegidas por RLS;
+- streaming progressivo, cancelamento e retry idempotente;
+- conta/modelo efetivos e Skills versionadas auditados por resposta;
+- seleção manual ou sugestão automática de Skills, sempre confirmada;
+- envelopes AES-256-GCM de credenciais numa tabela service-only.
 
-Pesquisa, Chat, Análises e dados financeiros não estão implementados. O único
-uso generativo cria uma proposta editável de Skill e nunca a guarda nem ativa.
+Pesquisa, Análises e dados financeiros não estão implementados. Tools e
+Agentes não têm opções nem execução; a sua presença no seletor é apenas um
+estado vazio explícito.
 
 ## 2. Arquitetura de execução
 
@@ -47,7 +51,8 @@ Next.js 16 App Router / Vercel
       Copilot validation/inference worker / Node 24 container
         ├─ endpoints estritos validate e infer
         ├─ @github/copilot-sdk 1.0.14 / CLI 1.0.85, mode: empty
-        ├─ inferência one-shot sem tools nem persistência
+        ├─ inferência one-shot e streaming oficial de message deltas
+        ├─ sem tools, MCP, agentes, skills nativas, memory ou session store
         └─ timeout, concorrência e replay bounded
   │
   ▼
@@ -78,26 +83,30 @@ cada handler de administração repete o guard junto do acesso aos dados.
 
 ## 4. Fronteira BFF
 
-| Método   | Endpoint                                 | Input                    | Efeito                      |
-| -------- | ---------------------------------------- | ------------------------ | --------------------------- |
-| `POST`   | `/api/auth/login`                        | email, password          | Cria sessão após membership |
-| `POST`   | `/api/auth/logout`                       | —                        | Termina a sessão            |
-| `POST`   | `/api/account/password`                  | atual, nova, confirmação | Reautentica e atualiza Auth |
-| `PUT`    | `/api/admin/premises`                    | content                  | Upsert da versão atual      |
-| `GET`    | `/api/admin/skills`                      | page, query, status      | Lista paginada              |
-| `POST`   | `/api/admin/skills`                      | campos + status          | Cria Skill                  |
-| `GET`    | `/api/admin/skills/:id`                  | UUID                     | Consulta Skill própria      |
-| `PATCH`  | `/api/admin/skills/:id`                  | update/lifecycle         | Edita ou muda estado        |
-| `DELETE` | `/api/admin/skills/:id`                  | confirmationName         | Elimina não ativa           |
-| `POST`   | `/api/admin/skills/:id/duplicate`        | —                        | Duplica como rascunho       |
-| `GET`    | `/api/admin/llm-accounts`                | —                        | Lista metadados próprios    |
-| `POST`   | `/api/admin/llm-accounts`                | fornecedor/nome/segredo  | Cria conta + segredo        |
-| `POST`   | `/api/admin/llm-accounts/:id/validate`   | —                        | Revalida e sincroniza       |
-| `PATCH`  | `/api/admin/llm-accounts/:id`            | nome/endpoint            | Edita metadados próprios    |
-| `PUT`    | `/api/admin/llm-accounts/:id/credential` | nova credencial          | Substitui envelope          |
-| `DELETE` | `/api/admin/llm-accounts/:id`            | confirmationName         | Elimina conta + segredo     |
-| `PUT`    | `/api/admin/llm-default`                 | accountModelId           | Troca predefinição global   |
-| `POST`   | `/api/llm/infer`                         | prompt                   | Inferência one-shot         |
+| Método         | Endpoint                                 | Input                    | Efeito                       |
+| -------------- | ---------------------------------------- | ------------------------ | ---------------------------- |
+| `POST`         | `/api/auth/login`                        | email, password          | Cria sessão após membership  |
+| `POST`         | `/api/auth/logout`                       | —                        | Termina a sessão             |
+| `POST`         | `/api/account/password`                  | atual, nova, confirmação | Reautentica e atualiza Auth  |
+| `PUT`          | `/api/admin/premises`                    | content                  | Upsert da versão atual       |
+| `GET`          | `/api/admin/skills`                      | page, query, status      | Lista paginada               |
+| `POST`         | `/api/admin/skills`                      | campos + status          | Cria Skill                   |
+| `GET`          | `/api/admin/skills/:id`                  | UUID                     | Consulta Skill própria       |
+| `PATCH`        | `/api/admin/skills/:id`                  | update/lifecycle         | Edita ou muda estado         |
+| `DELETE`       | `/api/admin/skills/:id`                  | confirmationName         | Elimina não ativa            |
+| `POST`         | `/api/admin/skills/:id/duplicate`        | —                        | Duplica como rascunho        |
+| `GET`          | `/api/admin/llm-accounts`                | —                        | Lista metadados próprios     |
+| `POST`         | `/api/admin/llm-accounts`                | fornecedor/nome/segredo  | Cria conta + segredo         |
+| `POST`         | `/api/admin/llm-accounts/:id/validate`   | —                        | Revalida e sincroniza        |
+| `PATCH`        | `/api/admin/llm-accounts/:id`            | nome/endpoint            | Edita metadados próprios     |
+| `PUT`          | `/api/admin/llm-accounts/:id/credential` | nova credencial          | Substitui envelope           |
+| `DELETE`       | `/api/admin/llm-accounts/:id`            | confirmationName         | Elimina conta + segredo      |
+| `PUT`          | `/api/admin/llm-default`                 | accountModelId           | Troca predefinição global    |
+| `POST`         | `/api/llm/infer`                         | prompt                   | Inferência one-shot          |
+| `GET/POST`     | `/api/chat/conversations`                | filtro / modelo opcional | Lista/cria conversa própria  |
+| `PATCH/DELETE` | `/api/chat/conversations/:id`            | título/configuração      | Atualiza/elimina em cascade  |
+| `POST`         | `/api/chat/suggestions`                  | mensagem + modelo        | Sugere IDs de Skills         |
+| `POST`         | `/api/chat/messages/stream`              | turno confirmado         | Stream NDJSON e persistência |
 
 Todos os inputs são validados com Zod. Handlers mutantes exigem um header
 `Origin` correspondente ao origin efetivo, considerando
@@ -123,8 +132,30 @@ As migrations são aplicadas por ordem e são reexecutáveis:
 6. `0006_preserve_transient_validation_catalog.sql`.
 7. `0007_llm_defaults_and_provider_quota.sql`.
 8. `0008_llm_inference_default.sql`.
+9. `0009_chat_base.sql`.
 
 Nenhuma migration cria objetos de aplicação em `public`.
+
+### Conversas e mensagens
+
+`chat_conversations` guarda título, conta/modelo atual, modo de Skills,
+seleção confirmada, versão otimista e última atividade. `chat_messages` guarda
+apenas texto visível, role, estado terminal, sequência, ligação ao turno,
+conta/modelo efetivos, usage limitado e auditoria das Skills. O delete da
+conversa elimina mensagens em cascade. Policies exigem simultaneamente
+`auth.uid() = user_id` e membership.
+
+Uma user message e o placeholder assistant são criados na mesma transação por
+`begin_chat_turn`; `client_request_id` é único e torna repetição de pedidos
+idempotente. `retry_chat_turn` mantém a user message original e cria apenas
+uma nova tentativa assistant depois de um estado cancelado/falhado.
+`finalize_chat_message` aceita exclusivamente `complete`, `cancelled` ou
+`failed`, impedindo que uma interrupção pareça resposta concluída.
+
+Cada Skill usada regista ID, nome, `updated_at` observado como versão e
+SHA-256 do conteúdo. O Markdown não é duplicado na mensagem. Esta combinação
+preserva a prova da versão efetivamente usada mesmo que a Skill mude depois,
+sem guardar prompts internos ou conteúdo redundante.
 
 ### `carcanhol.profiles`
 
@@ -464,7 +495,7 @@ e
 [service bindings](https://vercel.com/docs/services/bindings) e
 [container images](https://vercel.com/docs/functions/container-images).
 
-### Inferência one-shot
+### Inferência one-shot e streaming
 
 O BFF autentica primeiro, aplica same-origin e rate limits e aceita somente um
 `prompt` limitado. A preferência global é lida com anon+sessão sob
@@ -478,12 +509,26 @@ envelope cifrado.
 replay store distribuído, allowlist de paths, limites de body, concorrência e
 fila. O worker rejeita browser `Origin`, fixa o modelo recebido do BFF e usa
 uma sessão SDK `mode: "empty"` com tools/MCP/agents/skills/memory/store,
-telemetria, streaming e file tracking desativados. Em sucesso devolve somente
+telemetria e file tracking desativados. Em sucesso devolve somente
 texto limitado a 110 000 caracteres, duração limitada e contadores inteiros de
 input/output tokens. Em qualquer saída executa `disconnect`,
 `deleteSession`, `stop`/`forceStop` e apaga o diretório temporário; timeout
 também chama `abort`. Não existem tabelas, logs ou eventos da aplicação para
-prompt, resposta ou sessão.
+prompt ou sessão one-shot.
+
+O Chat usa `POST /v1/copilot/stream`, com `streaming: true` na API tipada do
+SDK 1.0.14 e apenas eventos raiz `assistant.message_delta`. Eventos de
+reasoning, tools, subagentes e diagnósticos internos nunca atravessam a
+fronteira. O worker projeta-os num protocolo NDJSON `v: 1` com allowlist
+`start/delta/heartbeat/done/error`, sequência estrita, limite total,
+backpressure e exatamente um terminal. O BFF volta a validar o protocolo,
+persiste o conteúdo final ou parcial com estado explícito e propaga
+`AbortSignal`; disconnect/timeout chama `abort`, seguindo-se sempre
+`disconnect`, `deleteSession` e `client.stop`/`forceStop`.
+
+Os deltas são efémeros e não são apresentados como resumíveis. Repetir o mesmo
+`client_request_id` nunca duplica mensagens; uma nova tentativa usa uma chave
+nova e liga-se à user message original.
 
 ### Skills e premissas
 
@@ -496,8 +541,10 @@ Estes métodos são server-only, criam sempre um cliente anon + sessão, repetem
 `requireAuthorizedUser()`, rejeitam um `userId` diferente do utilizador da
 sessão e aplicam simultaneamente `user_id` e `status = active`. A RLS volta a
 exigir ownership + membership, pelo que falham fechados e não aceitam a injeção
-de um cliente service role. Serão a base das futuras tools `list_skills` e
-`load_skill`; ainda não são expostos ao runtime.
+de um cliente service role. O Chat resolve novamente ownership, estado `active` e versão de cada ID no
+servidor. O browser nunca envia conteúdo de Skills. O conteúdo confirmado é
+ordenado, delimitado e incorporado como system context textual; não ativa o
+runtime nativo de Skills do Copilot.
 
 `POST /api/admin/skills/generate` valida uma descrição até 2 000 caracteres,
 aplica rate limit por utilizador e IP e permite apenas uma geração simultânea
@@ -507,11 +554,10 @@ exfiltração e segredos e pede JSON estrito. O parser rejeita JSON malformado,
 campos extra, limites excedidos e conteúdo ativo HTML/URI. Raw output nunca é
 devolvido em erros nem registado.
 
-A descrição gerada é deliberadamente semântica: no futuro poderá alimentar a
-sugestão de Skills relevantes. Esse contrato futuro limita-se a sugerir
-candidatos pelas descrições; aplicar qualquer Skill continuará a exigir
-confirmação do utilizador. Seleção e aplicação automáticas não fazem parte
-desta fase.
+A auto-sugestão envia apenas IDs, nomes e descrições mínimos ao classificador,
+exige JSON estrito com IDs allowlisted e reasons curtas e não persiste o
+pedido/resultado na conversa. O utilizador confirma ou edita as caixas antes
+da inferência principal; nunca há aplicação automática.
 
 As premissas globais serão futuramente injetadas como contexto superior à
 mensagem do utilizador. Nesta fase são apenas persistidas, nunca enviadas a um
@@ -541,20 +587,21 @@ equivalentes aos constraints Postgres e à validação Zod. A geração anuncia
 loading, pode ser cancelada e repetida sem apagar o pedido e usa uma
 pré-visualização plaintext responsiva, sem renderer HTML.
 
-## 9. Evolução planeada
+## 9. Roadmap oficial
 
-1. Ativar a infraestrutura do worker (Vercel Services exige configuração
-   externa) ou publicar o container num runtime isolado equivalente;
-2. operar e monitorizar o Redis de replay partilhado;
-3. implementar OAuth/GitHub App user-to-server;
-4. aplicar proteção SSRF/DNS, redirects, timeouts e limites antes de chamar
-   endpoints custom;
-5. autorizar modelos e configurar routing/fallbacks;
-6. integrar provider LLM e agent loop;
-7. ligar premissas globais e as duas operações de Skills ativas;
-8. adicionar registry de fontes financeiras/macro;
-9. implementar Pesquisa, Chat e Análises end-to-end;
-10. reforçar observabilidade, rate limiting e testes de integração.
+1. **Foundation — concluída:** auth, membership, shell, RLS e administração.
+2. **Plataforma LLM — concluída:** contas, validação, modelos, quota e worker.
+3. **Skills — concluída:** lifecycle manual e geração assistida.
+4. **Chat base — atual:** persistência, streaming e Skills confirmadas.
+5. **Dados financeiros + Tools — próxima:** fontes reais e execução limitada.
+6. **Agentes e orquestração:** apenas depois de Tools estarem disponíveis e
+   protegidas.
+7. **Análise temática:** workflows de análise sobre dados verificados.
+8. **UX avançada:** pesquisa, anexos e experiências enriquecidas aprovadas.
+9. **Hardening:** observabilidade, testes de integração, escala e operação.
+
+Tools precedem explicitamente agentes. A Fase 4 não inclui dados financeiros,
+Tools reais, agentes, orquestração, RAG, web search ou análise temática.
 
 Dados financeiros atuais terão sempre origem em tools/providers reais. O
 agente poderá propor candidatos, mas terá de os verificar antes de os

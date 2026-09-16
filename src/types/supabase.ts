@@ -175,6 +175,45 @@ export type LlmAccountQuota = {
 
 export type LlmAccountQuotaPublic = Omit<LlmAccountQuota, "user_id">;
 
+export type ChatSkillMode = "manual" | "automatic";
+export type ChatMessageStatus =
+  "complete" | "streaming" | "cancelled" | "failed";
+
+export type ChatConversation = {
+  id: string;
+  user_id: string;
+  title: string;
+  current_account_model_id: string;
+  skill_mode: ChatSkillMode;
+  selected_skill_ids: string[];
+  version: number;
+  last_message_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ChatMessage = {
+  id: string;
+  conversation_id: string;
+  user_id: string;
+  sequence: number;
+  role: "user" | "assistant";
+  status: ChatMessageStatus;
+  content: string;
+  client_request_id: string;
+  reply_to_message_id: string | null;
+  account_model_id: string | null;
+  provider: string | null;
+  account_name: string | null;
+  provider_model_id: string | null;
+  model_name: string | null;
+  skill_audit: Json;
+  usage: Json | null;
+  error_code: string | null;
+  created_at: string;
+  completed_at: string | null;
+};
+
 export type Database = {
   carcanhol: {
     Tables: {
@@ -295,6 +334,51 @@ export type Database = {
         >;
         Relationships: [];
       };
+      chat_conversations: {
+        Row: ChatConversation;
+        Insert: Pick<ChatConversation, "user_id" | "current_account_model_id"> &
+          Partial<
+            Omit<
+              ChatConversation,
+              "id" | "user_id" | "current_account_model_id"
+            >
+          >;
+        Update: Partial<
+          Omit<ChatConversation, "id" | "user_id" | "created_at">
+        >;
+        Relationships: [];
+      };
+      chat_messages: {
+        Row: ChatMessage;
+        Insert: Pick<
+          ChatMessage,
+          | "conversation_id"
+          | "user_id"
+          | "sequence"
+          | "role"
+          | "status"
+          | "client_request_id"
+        > &
+          Partial<
+            Omit<
+              ChatMessage,
+              | "id"
+              | "conversation_id"
+              | "user_id"
+              | "sequence"
+              | "role"
+              | "status"
+              | "client_request_id"
+            >
+          >;
+        Update: Partial<
+          Omit<
+            ChatMessage,
+            "id" | "conversation_id" | "user_id" | "sequence" | "created_at"
+          >
+        >;
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
     Functions: {
@@ -375,6 +459,100 @@ export type Database = {
           envelope_version: number;
           key_version: string;
         }[];
+      };
+      get_llm_chat_target: {
+        Args: {
+          p_user_id: string;
+          p_account_model_id: string;
+        };
+        Returns: {
+          account_id: string;
+          provider: string;
+          provider_model_id: string;
+          aad_provider: string;
+          ciphertext: string;
+          nonce: string;
+          auth_tag: string;
+          algorithm: string;
+          envelope_version: number;
+          key_version: string;
+        }[];
+      };
+      create_chat_conversation: {
+        Args: {
+          p_user_id: string;
+          p_title?: string;
+          p_account_model_id?: string | null;
+        };
+        Returns: ChatConversation;
+      };
+      update_chat_conversation: {
+        Args: {
+          p_user_id: string;
+          p_conversation_id: string;
+          p_title?: string | null;
+          p_account_model_id?: string | null;
+          p_skill_mode?: ChatSkillMode | null;
+          p_skill_ids?: string[] | null;
+        };
+        Returns: ChatConversation | null;
+      };
+      delete_chat_conversation: {
+        Args: {
+          p_user_id: string;
+          p_conversation_id: string;
+        };
+        Returns: boolean;
+      };
+      begin_chat_turn: {
+        Args: {
+          p_user_id: string;
+          p_conversation_id: string;
+          p_account_model_id: string;
+          p_client_request_id: string;
+          p_content: string;
+          p_title: string;
+          p_skill_mode: ChatSkillMode;
+          p_skill_ids: string[];
+          p_skill_audit: Json;
+          p_expected_version: number;
+        };
+        Returns: {
+          conversation_id: string;
+          user_message_id: string;
+          assistant_message_id: string;
+          conversation_version: number;
+          already_exists: boolean;
+        }[];
+      };
+      retry_chat_turn: {
+        Args: {
+          p_user_id: string;
+          p_conversation_id: string;
+          p_failed_assistant_id: string;
+          p_account_model_id: string;
+          p_client_request_id: string;
+          p_skill_audit: Json;
+          p_expected_version: number;
+        };
+        Returns: {
+          conversation_id: string;
+          user_message_id: string;
+          assistant_message_id: string;
+          conversation_version: number;
+          already_exists: boolean;
+        }[];
+      };
+      finalize_chat_message: {
+        Args: {
+          p_user_id: string;
+          p_assistant_message_id: string;
+          p_status: Exclude<ChatMessageStatus, "streaming">;
+          p_content: string;
+          p_usage?: Json | null;
+          p_error_code?: string | null;
+        };
+        Returns: ChatMessage;
       };
       rotate_llm_account_secret: {
         Args: {
