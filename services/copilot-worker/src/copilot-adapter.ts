@@ -249,11 +249,20 @@ export function createValidationSessionConfig(
 export function createInferenceSessionConfig(
   token: string,
   sessionId: string,
-  model: string
+  model: string,
+  systemPrompt?: string
 ): SessionConfig {
   return {
     ...createIsolatedSessionConfig(token, sessionId),
     model,
+    ...(systemPrompt
+      ? {
+          systemMessage: {
+            mode: "customize" as const,
+            content: systemPrompt,
+          },
+        }
+      : {}),
   };
 }
 
@@ -309,6 +318,7 @@ export async function runCopilotInference({
   token,
   model,
   prompt,
+  systemPrompt,
   requestId,
   timeoutMs,
   signal,
@@ -316,6 +326,7 @@ export async function runCopilotInference({
   token: string;
   model: string;
   prompt: string;
+  systemPrompt?: string;
   requestId: string;
   timeoutMs: number;
   signal: AbortSignal;
@@ -353,7 +364,8 @@ export async function runCopilotInference({
         model,
         prompt,
         timeoutMs,
-        signal
+        signal,
+        systemPrompt
       );
     } finally {
       signal.removeEventListener("abort", abortRuntime);
@@ -382,7 +394,8 @@ export async function inferWithSession(
   model: string,
   prompt: string,
   timeoutMs: number,
-  signal: AbortSignal
+  signal: AbortSignal,
+  systemPrompt?: string
 ): Promise<CopilotInferenceResponse> {
   const startedAt = Date.now();
   let session: Awaited<ReturnType<CopilotClient["createSession"]>> | null =
@@ -391,7 +404,7 @@ export async function inferWithSession(
   try {
     signal.throwIfAborted();
     session = await client.createSession(
-      createInferenceSessionConfig(token, sessionId, model)
+      createInferenceSessionConfig(token, sessionId, model, systemPrompt)
     );
     const activeSession = session;
     const abortSession = () =>

@@ -43,11 +43,12 @@ const server = createCopilotWorkerServer({
 
     return result;
   },
-  infer: async ({ requestId, token, model, prompt }, signal) => {
+  infer: async ({ requestId, token, model, prompt, systemPrompt }, signal) => {
     return runCopilotInference({
       token,
       model,
       prompt,
+      ...(systemPrompt ? { systemPrompt } : {}),
       requestId,
       timeoutMs: config.COPILOT_INFERENCE_TIMEOUT_MS,
       signal,

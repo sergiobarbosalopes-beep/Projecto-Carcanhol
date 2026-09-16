@@ -396,6 +396,7 @@ async function handleRequest(
 
       if ("prompt" in parsedRequest) {
         parsedRequest.prompt = "";
+        parsedRequest.systemPrompt = undefined;
       }
     }
   }

@@ -269,7 +269,8 @@ test("runs one inference and always disconnects and deletes the session", async 
     "claude-haiku-4.5",
     "Qual é a capital de Portugal?",
     1_000,
-    new AbortController().signal
+    new AbortController().signal,
+    "Responde apenas com JSON."
   );
 
   assert.equal(result.ok, true);
@@ -277,6 +278,10 @@ test("runs one inference and always disconnects and deletes the session", async 
   assert.deepEqual(result.usage, { inputTokens: 9, outputTokens: 6 });
   assert.equal(capturedPrompt, "Qual é a capital de Portugal?");
   assert.equal(capturedConfig.model, "claude-haiku-4.5");
+  assert.deepEqual(capturedConfig.systemMessage, {
+    mode: "customize",
+    content: "Responde apenas com JSON.",
+  });
   assert.deepEqual(events, [
     "create",
     "send",
@@ -302,7 +307,7 @@ test("rejects malformed inference output and still cleans up", async () => {
         },
         async sendAndWait() {
           events.push("send");
-          return { data: { content: "x".repeat(4_097) } };
+          return { data: { content: "x".repeat(110_001) } };
         },
         async abort() {
           events.push("abort");

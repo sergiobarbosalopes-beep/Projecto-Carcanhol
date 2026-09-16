@@ -1,6 +1,13 @@
 "use client";
 
-import { useId, useState, type FormEvent, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent,
+} from "react";
 import type { SkillList } from "@/src/admin/skills";
 import {
   GLOBAL_ASSUMPTIONS_MAX_LENGTH,
@@ -313,7 +320,12 @@ function AssumptionsPanel({ initialContent }: { initialContent: string }) {
   );
 }
 
-type SkillMode = "view" | "edit" | "create";
+type SkillMode = "view" | "edit" | "create" | "generate";
+type SkillProposal = {
+  name: string;
+  description: string;
+  markdown: string;
+};
 
 function SkillsPanel({ initialSkills }: { initialSkills: SkillList }) {
   const [skills, setSkills] = useState(initialSkills);
@@ -326,6 +338,21 @@ function SkillsPanel({ initialSkills }: { initialSkills: SkillList }) {
   const [loading, setLoading] = useState(false);
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [proposal, setProposal] = useState<SkillProposal | null>(null);
+
+  function openAiGenerator() {
+    if (
+      (mode === "create" || mode === "edit") &&
+      !window.confirm(
+        "Sair do formulário atual? As alterações manuais não guardadas não serão substituídas, mas deixarão de estar visíveis."
+      )
+    ) {
+      return;
+    }
+
+    setMode("generate");
+    setFeedback(null);
+  }
 
   async function loadSkills(page = 1) {
     setLoading(true);
@@ -428,15 +455,15 @@ function SkillsPanel({ initialSkills }: { initialSkills: SkillList }) {
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
-            disabled
-            title="Disponível após integração LLM"
-            className={`${SECONDARY_BUTTON_CLASS} cursor-not-allowed opacity-50`}
+            onClick={openAiGenerator}
+            className={SECONDARY_BUTTON_CLASS}
           >
             Criar com IA
           </button>
           <button
             type="button"
             onClick={() => {
+              setProposal(null);
               setSelected(null);
               setMode("create");
               setFeedback(null);
@@ -447,10 +474,6 @@ function SkillsPanel({ initialSkills }: { initialSkills: SkillList }) {
           </button>
         </div>
       </div>
-      <p className="mt-2 text-xs text-slate-500">
-        “Criar com IA” estará disponível após a integração LLM.
-      </p>
-
       <form
         onSubmit={handleSearch}
         className="mt-6 grid gap-3 rounded-xl bg-slate-50 p-3 sm:grid-cols-[minmax(0,1fr)_12rem_auto]"
@@ -565,14 +588,31 @@ function SkillsPanel({ initialSkills }: { initialSkills: SkillList }) {
         </div>
 
         <div className="min-w-0 rounded-xl border border-slate-200 p-4 sm:p-6">
-          {mode === "create" ? (
+          {mode === "generate" ? (
+            <AiSkillGenerator
+              onCancel={() => setMode("view")}
+              onApply={(generated) => {
+                setProposal(generated);
+                setSelected(null);
+                setMode("create");
+              }}
+            />
+          ) : mode === "create" ? (
             <SkillEditor
+              key={
+                proposal
+                  ? `${proposal.name}:${proposal.markdown.length}`
+                  : "manual"
+              }
               mode="create"
+              initialProposal={proposal ?? undefined}
               onCancel={() => {
+                setProposal(null);
                 setMode("view");
                 setSelected(skills.items[0] ?? null);
               }}
               onSaved={async (skill) => {
+                setProposal(null);
                 await loadSkills(1);
                 setSelected(skill);
                 setMode("view");
@@ -634,17 +674,23 @@ function SkillsPanel({ initialSkills }: { initialSkills: SkillList }) {
 function SkillEditor({
   mode,
   skill,
+  initialProposal,
   onCancel,
   onSaved,
 }: {
   mode: "create" | "edit";
   skill?: Skill;
+  initialProposal?: SkillProposal;
   onCancel: () => void;
   onSaved: (skill: Skill) => Promise<void>;
 }) {
-  const [name, setName] = useState(skill?.name ?? "");
-  const [description, setDescription] = useState(skill?.description ?? "");
-  const [content, setContent] = useState(skill?.content_markdown ?? "");
+  const [name, setName] = useState(skill?.name ?? initialProposal?.name ?? "");
+  const [description, setDescription] = useState(
+    skill?.description ?? initialProposal?.description ?? ""
+  );
+  const [content, setContent] = useState(
+    skill?.content_markdown ?? initialProposal?.markdown ?? ""
+  );
   const [pending, setPending] = useState(false);
   const [feedback, setFeedback] = useState<Feedback>(null);
   const formId = useId();
@@ -698,6 +744,15 @@ function SkillEditor({
       <h3 className="text-lg font-bold text-slate-950">
         {mode === "create" ? "Nova Skill" : "Editar Skill"}
       </h3>
+      {initialProposal && (
+        <p
+          className="rounded-lg bg-teal-50 p-3 text-sm text-teal-900"
+          role="status"
+        >
+          Proposta aplicada. Reveja e edite todos os campos antes de guardar.
+          Nada foi persistido.
+        </p>
+      )}
       <FormField label="Nome" htmlFor={`${formId}-name`}>
         <input
           id={`${formId}-name`}
@@ -766,6 +821,191 @@ function SkillEditor({
         </button>
       </div>
     </form>
+  );
+}
+
+function AiSkillGenerator({
+  onCancel,
+  onApply,
+}: {
+  onCancel: () => void;
+  onApply: (proposal: SkillProposal) => void;
+}) {
+  const [requirement, setRequirement] = useState("");
+  const [proposal, setProposal] = useState<SkillProposal | null>(null);
+  const [pending, setPending] = useState(false);
+  const [feedback, setFeedback] = useState<Feedback>(null);
+  const controller = useRef<AbortController | null>(null);
+  const pendingRef = useRef(false);
+  const formId = useId();
+
+  useEffect(
+    () => () => {
+      controller.current?.abort();
+    },
+    []
+  );
+
+  async function generate(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (pendingRef.current) {
+      return;
+    }
+
+    pendingRef.current = true;
+    controller.current?.abort();
+    const nextController = new AbortController();
+    controller.current = nextController;
+    setPending(true);
+    setFeedback(null);
+
+    const result = await apiRequest<{ proposal: SkillProposal }>(
+      "/api/admin/skills/generate",
+      {
+        method: "POST",
+        body: JSON.stringify({ requirement }),
+        signal: nextController.signal,
+      }
+    );
+
+    if (controller.current !== nextController) {
+      return;
+    }
+
+    controller.current = null;
+    pendingRef.current = false;
+    setPending(false);
+
+    if (!result.ok) {
+      setFeedback({ kind: "error", message: result.error });
+      return;
+    }
+
+    setProposal(result.data.proposal);
+    setFeedback({
+      kind: "success",
+      message: "Proposta gerada. Reveja-a antes de a aplicar.",
+    });
+  }
+
+  function cancelGeneration() {
+    controller.current?.abort();
+    controller.current = null;
+    pendingRef.current = false;
+    setPending(false);
+    setFeedback({ kind: "error", message: "Geração cancelada." });
+  }
+
+  function applyProposal() {
+    if (
+      proposal &&
+      window.confirm(
+        "Aplicar esta proposta ao formulário editável? A Skill só será criada quando guardar."
+      )
+    ) {
+      onApply(proposal);
+    }
+  }
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <h3 className="text-lg font-bold text-slate-950">Criar Skill com IA</h3>
+        <p className="mt-1 text-sm text-slate-600">
+          A IA prepara uma proposta editável. Não guarda nem ativa a Skill.
+        </p>
+      </div>
+      <form onSubmit={generate} className="space-y-4" aria-busy={pending}>
+        <FormField
+          label="O que pretende que esta Skill faça?"
+          htmlFor={`${formId}-requirement`}
+        >
+          <textarea
+            id={`${formId}-requirement`}
+            required
+            minLength={10}
+            maxLength={2_000}
+            rows={6}
+            value={requirement}
+            onChange={(event) => setRequirement(event.target.value)}
+            disabled={pending}
+            className={`${INPUT_CLASS} min-h-36 resize-y`}
+            placeholder="Ex.: Analisar pedidos de investimento, validar pressupostos e apresentar riscos e recomendações de forma clara."
+          />
+        </FormField>
+        <p className="text-right text-xs text-slate-500">
+          {requirement.length.toLocaleString("pt-PT")} / 2 000
+        </p>
+        <div className="flex flex-wrap justify-end gap-2">
+          <button
+            type="button"
+            onClick={pending ? cancelGeneration : onCancel}
+            className={SECONDARY_BUTTON_CLASS}
+          >
+            {pending ? "Cancelar geração" : "Voltar"}
+          </button>
+          <button
+            type="submit"
+            disabled={pending || requirement.trim().length < 10}
+            className={PRIMARY_BUTTON_CLASS}
+          >
+            {pending
+              ? "A gerar proposta..."
+              : proposal
+                ? "Gerar novamente"
+                : "Gerar proposta"}
+          </button>
+        </div>
+      </form>
+      <FeedbackMessage feedback={feedback} />
+      {proposal && (
+        <section
+          aria-labelledby={`${formId}-proposal-heading`}
+          className="space-y-4 rounded-xl border border-teal-200 bg-teal-50/50 p-4"
+        >
+          <h4
+            id={`${formId}-proposal-heading`}
+            className="font-bold text-slate-950"
+          >
+            Proposta
+          </h4>
+          <div>
+            <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
+              Nome
+            </p>
+            <p className="mt-1 text-sm font-semibold text-slate-950">
+              {proposal.name}
+            </p>
+          </div>
+          <div>
+            <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
+              Descrição
+            </p>
+            <p className="mt-1 whitespace-pre-wrap text-sm text-slate-700">
+              {proposal.description}
+            </p>
+          </div>
+          <div>
+            <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
+              Conteúdo Markdown
+            </p>
+            <pre className="mt-1 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-slate-950 p-3 font-mono text-xs leading-6 text-slate-100">
+              {proposal.markdown}
+            </pre>
+          </div>
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={applyProposal}
+              className={PRIMARY_BUTTON_CLASS}
+            >
+              Aplicar ao formulário
+            </button>
+          </div>
+        </section>
+      )}
+    </div>
   );
 }
 

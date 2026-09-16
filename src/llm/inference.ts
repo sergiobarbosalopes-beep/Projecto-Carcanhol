@@ -29,7 +29,8 @@ const inferenceDefaultSchema = z
 export async function runLlmInference(
   userId: string,
   prompt: string,
-  authenticatedClient?: CarcanholClient
+  authenticatedClient?: CarcanholClient,
+  options: { systemPrompt?: string; signal?: AbortSignal } = {}
 ) {
   const client = authenticatedClient ?? (await createClient());
   const target = await loadOwnedInferenceDefault(client, userId);
@@ -66,7 +67,9 @@ export async function runLlmInference(
       credential,
       target.provider_model_id,
       prompt,
-      requestId
+      requestId,
+      options.systemPrompt,
+      options.signal
     );
 
     if (!result.ok) {

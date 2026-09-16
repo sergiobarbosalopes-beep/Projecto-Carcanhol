@@ -1,7 +1,7 @@
 # Arquitetura — Projecto Carcanhol
 
-Versão: 3.4
-Estado: Fase 3D implementada
+Versão: 3.5
+Estado: Fase 3E implementada
 
 ## 1. Objetivo e âmbito atual
 
@@ -16,18 +16,18 @@ A Fase 3B acrescenta validação real à fundação de produto e administração
 - autenticação e membership server-side;
 - alteração de palavra-passe;
 - versão atual das premissas globais;
-- gestão manual completa de Skills;
+- gestão manual completa de Skills e geração assistida de propostas;
 - gestão de várias contas de fornecedores LLM por utilizador;
 - GitHub Copilot como provider canónico, validado através do SDK num worker;
 - descoberta e sincronização do catálogo de modelos por conta;
 - predefinição global atómica de uma combinação conta+modelo por utilizador;
 - utilização account-wide do GitHub Copilot, isolada da telemetria de sessões;
-- probe de inferência one-shot autenticado, sem UI ou persistência;
+- inferência one-shot autenticada para propostas de Skills, sem persistência;
 - envelopes AES-256-GCM de credenciais numa tabela service-only;
 - contrato server-only para carregar futuramente Skills ativas.
 
 Pesquisa, Chat, Análises e dados financeiros não estão implementados. O único
-uso generativo é o endpoint técnico one-shot, sem integração nessas páginas.
+uso generativo cria uma proposta editável de Skill e nunca a guarda nem ativa.
 
 ## 2. Arquitetura de execução
 
@@ -265,6 +265,13 @@ exige ainda que o utilizador escreva exatamente o nome antes da eliminação.
 Duplicar cria sempre uma nova Skill `draft`. Restaurar uma arquivada resulta
 em `inactive`; a ativação posterior é explícita.
 
+`Criar com IA` abre um fluxo separado. O browser envia apenas a descrição do
+que a Skill deverá fazer; conta, modelo e token são resolvidos no servidor. A
+resposta `{name, description, markdown}` é apresentada como plaintext e só
+entra no formulário depois de confirmação explícita. Mesmo depois de aplicada,
+a proposta continua local e editável: apenas `Guardar rascunho` ou
+`Guardar e ativar` escreve na tabela `skills`.
+
 ## 7. Contrato com o worker Copilot
 
 ### GitHub Copilot
@@ -460,7 +467,7 @@ e
 ### Inferência one-shot
 
 O BFF autentica primeiro, aplica same-origin e rate limits e aceita somente um
-`prompt` de 1–500 caracteres. A preferência global é lida com anon+sessão sob
+`prompt` limitado. A preferência global é lida com anon+sessão sob
 RLS; conta, modelo e token não são campos do request. Uma RPC service-only
 recebe o `user_id` autenticado e o ID selecionado e volta a confirmar
 atomicamente a mesma preferência, provider `github_copilot`, conta `active`,
@@ -472,7 +479,7 @@ replay store distribuído, allowlist de paths, limites de body, concorrência e
 fila. O worker rejeita browser `Origin`, fixa o modelo recebido do BFF e usa
 uma sessão SDK `mode: "empty"` com tools/MCP/agents/skills/memory/store,
 telemetria, streaming e file tracking desativados. Em sucesso devolve somente
-texto limitado a 4 096 caracteres, duração limitada e contadores inteiros de
+texto limitado a 110 000 caracteres, duração limitada e contadores inteiros de
 input/output tokens. Em qualquer saída executa `disconnect`,
 `deleteSession`, `stop`/`forceStop` e apaga o diretório temporário; timeout
 também chama `abort`. Não existem tabelas, logs ou eventos da aplicação para
@@ -490,7 +497,21 @@ Estes métodos são server-only, criam sempre um cliente anon + sessão, repetem
 sessão e aplicam simultaneamente `user_id` e `status = active`. A RLS volta a
 exigir ownership + membership, pelo que falham fechados e não aceitam a injeção
 de um cliente service role. Serão a base das futuras tools `list_skills` e
-`load_skill`; a Fase 3B ainda não as expõe nem executa geração LLM.
+`load_skill`; ainda não são expostos ao runtime.
+
+`POST /api/admin/skills/generate` valida uma descrição até 2 000 caracteres,
+aplica rate limit por utilizador e IP e permite apenas uma geração simultânea
+por utilizador em cada instância. Um system prompt controlado pelo servidor
+trata o requisito como dados não confiáveis, proíbe tools, execução,
+exfiltração e segredos e pede JSON estrito. O parser rejeita JSON malformado,
+campos extra, limites excedidos e conteúdo ativo HTML/URI. Raw output nunca é
+devolvido em erros nem registado.
+
+A descrição gerada é deliberadamente semântica: no futuro poderá alimentar a
+sugestão de Skills relevantes. Esse contrato futuro limita-se a sugerir
+candidatos pelas descrições; aplicar qualquer Skill continuará a exigir
+confirmação do utilizador. Seleção e aplicação automáticas não fazem parte
+desta fase.
 
 As premissas globais serão futuramente injetadas como contexto superior à
 mensagem do utilizador. Nesta fase são apenas persistidas, nunca enviadas a um
@@ -516,7 +537,9 @@ duplo clique e anunciam o progresso. O catálogo pode ser consultado, mas não
 ativado nesta entrega.
 
 Listas de Skills têm paginação server-side de 20 rows. Textareas têm limites
-equivalentes aos constraints Postgres e à validação Zod.
+equivalentes aos constraints Postgres e à validação Zod. A geração anuncia
+loading, pode ser cancelada e repetida sem apagar o pedido e usa uma
+pré-visualização plaintext responsiva, sem renderer HTML.
 
 ## 9. Evolução planeada
 

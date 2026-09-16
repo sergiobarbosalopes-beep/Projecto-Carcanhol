@@ -8,7 +8,7 @@ test("inference contract accepts the authorized probe and rejects client-control
     "utf8"
   );
 
-  assert.match(contract, /COPILOT_INFERENCE_MAX_PROMPT_LENGTH = 500/);
+  assert.match(contract, /COPILOT_INFERENCE_MAX_PROMPT_LENGTH = 8_000/);
   assert.match(
     contract,
     /copilotInferenceRequestSchema[\s\S]+prompt: copilotInferencePromptSchema/
@@ -23,7 +23,7 @@ test("inference response permits only bounded text and safe usage fields", () =>
     "utf8"
   );
 
-  assert.match(contract, /COPILOT_INFERENCE_MAX_TEXT_LENGTH = 4_096/);
+  assert.match(contract, /COPILOT_INFERENCE_MAX_TEXT_LENGTH = 110_000/);
   assert.match(
     contract,
     /inputTokens: z\.number\(\)\.int\(\)\.nonnegative\(\)/

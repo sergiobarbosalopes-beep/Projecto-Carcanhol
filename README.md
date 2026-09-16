@@ -4,16 +4,18 @@ Aplicação Next.js de apoio à decisão de investimento, preparada para combina
 dados financeiros reais com análise assistida por IA. A arquitetura completa
 está em [`docs/architecture.md`](docs/architecture.md).
 
-**Estado atual: Fase 3D — probe de inferência LLM.** A aplicação inclui
+**Estado atual: Fase 3E — criação de Skills com IA.** A aplicação inclui
 autenticação server-side, navegação protegida, gestão de conta, premissas
 globais, Skills manuais e configuração segura de várias contas LLM por
 utilizador. Contas GitHub Copilot são autenticadas num worker isolado antes de
 serem persistidas, o catálogo de modelos é sincronizado, uma combinação
 conta+modelo pode ser escolhida como predefinição global e a utilização
 account-wide disponibilizada pelo GitHub Copilot é atualizada através do SDK.
-Inclui ainda um endpoint BFF mínimo de inferência one-shot, sem UI nem
-persistência de prompt/resposta/sessão. Pesquisa, Chat e Análises continuam
-sem geração LLM integrada nem dados financeiros.
+Inclui ainda criação assistida de Skills através do canal de inferência
+one-shot: a IA propõe nome, descrição semanticamente útil e Markdown, mas o
+utilizador tem sempre de aplicar a proposta ao formulário e guardá-la
+explicitamente. Pedido, resposta e sessão não são persistidos. Pesquisa, Chat
+e Análises continuam sem geração LLM integrada nem dados financeiros.
 
 ## Stack
 
@@ -38,7 +40,8 @@ triggers globais em `auth.users` e não concedem membership automaticamente.
     ser ativados sem validação real;
   - **Skills:** pesquisa paginada, criação manual, consulta, edição,
     duplicação, ativação, desativação, arquivo, restauro e eliminação
-    definitiva reforçada;
+    definitiva reforçada; a criação com IA gera apenas uma proposta editável,
+    nunca uma gravação ou ativação automática;
   - **Premissas:** uma versão atual de texto livre das premissas globais, até
     20 000 caracteres;
   - **Conta:** email atual e alteração de palavra-passe via Supabase Auth;
@@ -69,7 +72,8 @@ app/
     admin/premises/            Premissas globais
     admin/skills/              CRUD e lifecycle de Skills
     admin/llm-accounts/        Criação/revalidação e rotação de contas LLM
-    llm/infer/                 Inferência one-shot autenticada
+    llm/infer/                 Probe genérico de inferência one-shot
+    admin/skills/generate/     Proposta estruturada de Skill com IA
 services/
   copilot-worker/              Runtime SDK isolado, HTTP/HMAC e container
 src/
