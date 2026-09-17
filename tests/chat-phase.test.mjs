@@ -119,7 +119,7 @@ test("cancelled and failed responses remain visibly terminal and retry is idempo
 });
 
 test("Tools and Agents have no execution path and assistant output is plain text", () => {
-  assert.match(workspace, /Não existem opções nem execução desta categoria/);
+  assert.match(workspace, /Ainda não existem \{sectionLabel\(section\)\}/);
   assert.doesNotMatch(workspace, /dangerouslySetInnerHTML/);
   assert.doesNotMatch(
     `${streamRoute}\n${repository}`,
@@ -137,7 +137,7 @@ test("chat composer keeps a compact sticky three-card context overview", () => {
   assert.match(workspace, /md:grid-cols-3/);
   assert.match(
     workspace,
-    /role="group"\s+aria-label="Contexto da próxima mensagem"/
+    /role="group"\s+aria-label="Capacidades do Projecto Carcanhol para a próxima mensagem"/
   );
   assert.match(workspace, /\["skills", "tools", "agents"\]/);
   assert.match(workspace, /max-h-44 overflow-y-auto/);
@@ -174,9 +174,29 @@ test("Skill controls and draft state stay owned by the chat workspace", () => {
   assert.match(workspace, /onToggleSuggested\(skill\.id\)/);
   assert.match(workspace, /onToggleSkill\(skill\.id\)/);
   assert.match(workspace, /placeholder="Pesquisar Skills"/);
+  assert.match(workspace, /aria-label="Pesquisar Skills do Carcanhol"/);
   assert.match(workspace, /data-testid=\{`\$\{section\}-empty-state`\}/);
   assert.match(workspace, /aria-label=\{`Modo de seleção de \$\{sectionLabel/);
   assert.match(workspace, /aria-pressed=\{mode === "automatic"\}/);
+});
+
+test("Copilot capabilities are automatic and read-only while selectors are Carcanhol-only", () => {
+  assert.match(workspace, /Capacidades GitHub Copilot: automáticas/);
+  assert.match(workspace, /Geridas pelo runtime/);
+  assert.match(
+    workspace,
+    /apenas as capacidades GitHub Copilot que estejam disponíveis e sejam compatíveis/
+  );
+  assert.match(workspace, /Skills do Carcanhol/);
+  assert.match(workspace, /Tools do Carcanhol/);
+  assert.match(workspace, /Agentes do Carcanhol/);
+  assert.match(workspace, /Modo de seleção de Skills do Carcanhol/);
+
+  const summary = workspace.slice(
+    workspace.indexOf("function CopilotCapabilitiesSummary"),
+    workspace.indexOf("function ContextOverview")
+  );
+  assert.doesNotMatch(summary, /<button|<input|<select|type="checkbox"/);
 });
 
 test("streaming scroll follows only users who remain near the thread end", () => {

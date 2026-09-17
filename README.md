@@ -14,9 +14,12 @@ account-wide disponibilizada pelo GitHub Copilot é atualizada através do SDK.
 Inclui criação assistida de Skills através do canal de inferência one-shot e
 Chat textual persistente por utilizador, com streaming progressivo real,
 cancelamento, retry idempotente, seleção de conta/modelo por conversa e Skills
-manuais ou sugeridas com confirmação. Tools e Agentes aparecem apenas como
-estados vazios e não têm opções nem execução. Pesquisa, Análises e dados
-financeiros continuam fora do âmbito.
+do Carcanhol manuais ou sugeridas com confirmação. Tools e Agentes do
+Carcanhol aparecem apenas como estados vazios e não têm opções nem execução.
+Capacidades disponibilizadas pelo runtime GitHub Copilot são geridas
+automaticamente, sem seleção manual na UI; esta fase não ativa nem promete
+novas capacidades built-in. Pesquisa, Análises e dados financeiros continuam
+fora do âmbito.
 
 ## Stack
 
@@ -49,9 +52,12 @@ triggers globais em `auth.users` e não concedem membership automaticamente.
 - resolução server-only de Skills `active` para contexto textual delimitado;
 - Chat responsivo com conversas RLS, rename/delete cascade, respostas
   progressivas canceláveis e estados completos/cancelados/falhados explícitos;
-- seletor de Skills por conversa, manual ou automático confirmado, e auditoria
-  por resposta com ID, nome, `updated_at` usado como versão e SHA-256 do
-  conteúdo; Tools/Agentes não são executáveis;
+- seletor de Skills do Carcanhol por conversa, manual ou automático confirmado,
+  e auditoria por resposta com ID, nome, `updated_at` usado como versão e
+  SHA-256 do conteúdo; Tools/Agentes do Carcanhol não são executáveis;
+- resumo read-only das capacidades GitHub Copilot: o runtime gere
+  automaticamente apenas as que estejam disponíveis e sejam compatíveis, sem
+  expor internals, permissões ou seleção manual;
 - credenciais LLM cifradas no backend com AES-256-GCM e persistidas numa tabela
   separada, acessível apenas à service role.
 

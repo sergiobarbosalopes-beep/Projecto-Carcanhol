@@ -611,6 +611,7 @@ export function ChatWorkspace({ initial }: { initial: ChatBootstrap }) {
             streaming={streaming}
             onModelChange={changeModel}
           />
+          <CopilotCapabilitiesSummary />
           <ContextOverview
             expandedSection={expandedSection}
             conversation={selected}
@@ -685,7 +686,7 @@ export function ChatWorkspace({ initial }: { initial: ChatBootstrap }) {
                 {suggesting
                   ? "A sugerir…"
                   : selected?.skill_mode === "automatic" && suggestions === null
-                    ? "Sugerir Skills"
+                    ? "Sugerir Skills do Carcanhol"
                     : "Enviar"}
               </button>
             )}
@@ -792,6 +793,26 @@ function ModelControl({
   );
 }
 
+function CopilotCapabilitiesSummary() {
+  const description =
+    "O runtime gere automaticamente apenas as capacidades GitHub Copilot que estejam disponíveis e sejam compatíveis. Este controlo não expõe permissões nem ativa novas capacidades.";
+
+  return (
+    <div
+      className="mb-2 flex min-w-0 flex-wrap items-center justify-between gap-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs"
+      role="status"
+      aria-label={`Capacidades GitHub Copilot: automáticas. ${description}`}
+      title={description}
+      data-testid="copilot-capabilities-summary"
+    >
+      <span className="font-bold text-slate-700">
+        Capacidades GitHub Copilot: automáticas
+      </span>
+      <span className="text-slate-500">Geridas pelo runtime</span>
+    </div>
+  );
+}
+
 function ContextOverview({
   expandedSection,
   conversation,
@@ -821,7 +842,7 @@ function ContextOverview({
     <div
       className="grid gap-2 md:grid-cols-3"
       role="group"
-      aria-label="Contexto da próxima mensagem"
+      aria-label="Capacidades do Projecto Carcanhol para a próxima mensagem"
       data-testid="context-overview"
     >
       {sections.map((section) => {
@@ -930,7 +951,8 @@ function SelectorPanel({
           ))}
         </div>
         <p className="rounded-lg border border-dashed border-slate-300 bg-white p-3 text-xs leading-5 text-slate-500">
-          Não existem opções nem execução desta categoria nesta fase.
+          Ainda não existem {sectionLabel(section)} disponíveis nem execução
+          desta categoria nesta fase.
         </p>
       </div>
     );
@@ -949,7 +971,7 @@ function SelectorPanel({
         <div
           className="flex rounded-lg border border-slate-300 bg-white p-1"
           role="group"
-          aria-label="Modo de seleção de Skills"
+          aria-label="Modo de seleção de Skills do Carcanhol"
         >
           {(["automatic", "manual"] as const).map((mode) => (
             <button
@@ -977,8 +999,8 @@ function SelectorPanel({
 
       {automatic && suggestions === null ? (
         <p className="rounded-lg border border-dashed border-slate-300 bg-white p-3 text-xs leading-5 text-slate-500">
-          Escreva a mensagem e peça sugestões. Apenas nomes e descrições são
-          usados nessa etapa.
+          Escreva a mensagem e peça sugestões de Skills do Carcanhol. Apenas
+          nomes e descrições são usados nessa etapa.
         </p>
       ) : (
         <>
@@ -987,13 +1009,13 @@ function SelectorPanel({
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Pesquisar Skills"
-            aria-label="Pesquisar Skills"
+            aria-label="Pesquisar Skills do Carcanhol"
             className="min-h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm outline-none focus:border-teal-700 focus:ring-2 focus:ring-teal-700/20"
           />
           <div className="mt-2 space-y-1">
             {filtered.length === 0 ? (
               <p className="p-2 text-sm text-slate-500">
-                Não existem Skills ativas correspondentes.
+                Não existem Skills do Carcanhol ativas correspondentes.
               </p>
             ) : (
               filtered.map((skill) => {
@@ -1098,7 +1120,9 @@ function MessageBubble({
         <p className="mt-2 text-[11px] text-slate-400">
           {providerLabel(message.provider ?? "")} · {message.account_name} ·{" "}
           {message.model_name}
-          {audit.length > 0 ? ` · Skills: ${audit.join(", ")}` : ""}
+          {audit.length > 0
+            ? ` · Skills do Carcanhol: ${audit.join(", ")}`
+            : ""}
         </p>
       )}
     </article>
@@ -1211,10 +1235,10 @@ function providerLabel(provider: string) {
 
 function sectionLabel(section: SelectorSection) {
   return section === "skills"
-    ? "Skills"
+    ? "Skills do Carcanhol"
     : section === "tools"
-      ? "Tools"
-      : "Agentes";
+      ? "Tools do Carcanhol"
+      : "Agentes do Carcanhol";
 }
 
 async function apiRequest<T>(
