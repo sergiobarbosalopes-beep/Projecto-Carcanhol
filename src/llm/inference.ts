@@ -3,6 +3,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { createCopilotInferenceWorkerHttpClient } from "@/services/copilot-worker/src/http-client";
+import { createCopilotStreamingWorkerHttpClient } from "@/services/copilot-worker/src/http-client";
 import {
   createClient,
   createServiceRoleClient,
@@ -30,10 +31,18 @@ export async function runLlmInference(
   userId: string,
   prompt: string,
   authenticatedClient?: CarcanholClient,
-  options: { systemPrompt?: string; signal?: AbortSignal } = {}
+  options: {
+    systemPrompt?: string;
+    signal?: AbortSignal;
+    accountModelId?: string;
+  } = {}
 ) {
   const client = authenticatedClient ?? (await createClient());
-  const target = await loadOwnedInferenceDefault(client, userId);
+  const target = await loadOwnedInferenceTarget(
+    client,
+    userId,
+    options.accountModelId
+  );
   let credential = "";
 
   try {
@@ -90,10 +99,100 @@ export async function runLlmInference(
   }
 }
 
-async function loadOwnedInferenceDefault(
-  client: CarcanholClient,
-  userId: string
+export async function openLlmInferenceStream(
+  userId: string,
+  accountModelId: string,
+  prompt: string,
+  authenticatedClient: CarcanholClient,
+  options: { systemPrompt?: string; signal?: AbortSignal } = {}
 ) {
+  const target = await loadOwnedInferenceTarget(
+    authenticatedClient,
+    userId,
+    accountModelId
+  );
+  let credential = "";
+
+  try {
+    credential = decryptCredentialForValidation(
+      {
+        ciphertext: target.ciphertext,
+        nonce: target.nonce,
+        authTag: target.auth_tag,
+        algorithm: target.algorithm,
+        envelopeVersion: target.envelope_version,
+        keyVersion: target.key_version,
+      },
+      {
+        userId,
+        accountId: target.account_id,
+        provider: target.aad_provider,
+      }
+    );
+    const requestId = randomUUID();
+    const {
+      COPILOT_WORKER_URL,
+      COPILOT_WORKER_HMAC_SECRET,
+      COPILOT_WORKER_TIMEOUT_MS,
+    } = getCopilotWorkerEnv();
+    const stream = createCopilotStreamingWorkerHttpClient({
+      baseUrl: COPILOT_WORKER_URL,
+      hmacSecret: COPILOT_WORKER_HMAC_SECRET,
+      timeoutMs: COPILOT_WORKER_TIMEOUT_MS,
+    });
+    const result = await stream(
+      credential,
+      target.provider_model_id,
+      prompt,
+      requestId,
+      options.systemPrompt,
+      options.signal
+    );
+
+    if (!result.ok) {
+      if (result.code === "timeout") {
+        throw new LlmInferenceTimeoutError();
+      }
+      throw new LlmInferenceUnavailableError();
+    }
+
+    return result;
+  } finally {
+    credential = "";
+  }
+}
+
+async function loadOwnedInferenceTarget(
+  client: CarcanholClient,
+  userId: string,
+  accountModelId?: string
+) {
+  if (accountModelId) {
+    const serviceClient = createServiceRoleClient();
+    const { data, error } = await serviceClient
+      .rpc("get_llm_chat_target", {
+        p_user_id: userId,
+        p_account_model_id: accountModelId,
+      })
+      .maybeSingle();
+
+    if (error) {
+      throw new LlmInferenceUnavailableError();
+    }
+
+    if (!data) {
+      throw new LlmInferenceDefaultUnavailableError();
+    }
+
+    const parsed = inferenceDefaultSchema.safeParse(data);
+
+    if (!parsed.success) {
+      throw new LlmInferenceUnavailableError();
+    }
+
+    return parsed.data;
+  }
+
   const { data: preference, error: preferenceError } = await client
     .from("llm_model_preferences")
     .select("account_model_id")

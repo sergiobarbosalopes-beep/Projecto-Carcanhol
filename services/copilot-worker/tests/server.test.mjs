@@ -4,7 +4,9 @@ import test from "node:test";
 import {
   COPILOT_HEALTH_PATH,
   COPILOT_INFERENCE_PATH,
+  COPILOT_STREAM_PATH,
   COPILOT_VALIDATION_PATH,
+  copilotStreamEventSchema,
 } from "../dist/contract.js";
 import { createSignedWorkerHeaders } from "../dist/request-auth.js";
 import { validateCopilotCredential } from "../dist/runtime.js";
@@ -33,6 +35,7 @@ test("serves only signed, replay-protected inference requests without browser or
       };
     },
   });
+
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
 
@@ -47,6 +50,7 @@ test("serves only signed, replay-protected inference requests without browser or
       model: "claude-haiku-4.5",
       prompt: "Qual é a capital de Portugal?",
     });
+
     const headers = createSignedWorkerHeaders({
       body,
       method: "POST",
@@ -105,6 +109,129 @@ test("serves only signed, replay-protected inference requests without browser or
     server.close();
     await once(server, "close");
   }
+});
+
+test("streams only ordered allowlisted NDJSON events for a signed request", async () => {
+  const requestId = "6969d102-dba7-4f30-92f3-7446259f59e4";
+  const server = createCopilotWorkerServer({
+    hmacSecret: secret,
+    validate: async ({ requestId: id }) => ({
+      ok: false,
+      requestId: id,
+      code: "unknown",
+    }),
+    inferStream: async (request, _signal, emit) => {
+      await emit({ v: 1, type: "start", requestId: request.requestId });
+      await emit({
+        v: 1,
+        type: "delta",
+        requestId: request.requestId,
+        sequence: 1,
+        text: "Lis",
+      });
+      await emit({
+        v: 1,
+        type: "delta",
+        requestId: request.requestId,
+        sequence: 2,
+        text: "boa",
+      });
+      await emit({
+        v: 1,
+        type: "done",
+        requestId: request.requestId,
+        text: "Lisboa",
+        durationMs: 10,
+      });
+    },
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+
+  try {
+    const address = server.address();
+    assert.equal(typeof address, "object");
+    const body = JSON.stringify({
+      requestId,
+      token,
+      model: "claude-haiku-4.5",
+      prompt: "Capital?",
+    });
+    const headers = createSignedWorkerHeaders({
+      body,
+      method: "POST",
+      path: COPILOT_STREAM_PATH,
+      requestId,
+      secret,
+    });
+    const response = await fetch(
+      `http://127.0.0.1:${address.port}${COPILOT_STREAM_PATH}`,
+      {
+        method: "POST",
+        body,
+        headers: {
+          ...headers,
+          Accept: "application/x-ndjson",
+          "Content-Type": "application/json",
+        },
+      }
+    );
+    const events = (await response.text())
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("content-type"), /application\/x-ndjson/);
+    assert.deepEqual(
+      events.map((event) => event.type),
+      ["start", "delta", "delta", "done"]
+    );
+    assert.deepEqual(
+      events
+        .filter((event) => event.type === "delta")
+        .map((event) => event.sequence),
+      [1, 2]
+    );
+    assert.equal(JSON.stringify(events).includes(token), false);
+  } finally {
+    server.close();
+    await once(server, "close");
+  }
+});
+
+test("rejects malformed and oversized public stream events", () => {
+  assert.equal(
+    copilotStreamEventSchema.safeParse({
+      v: 1,
+      type: "delta",
+      requestId: "6969d102-dba7-4f30-92f3-7446259f59e4",
+      sequence: 0,
+      text: "invalid",
+    }).success,
+    false
+  );
+  assert.equal(
+    copilotStreamEventSchema.safeParse({
+      v: 1,
+      type: "delta",
+      requestId: "6969d102-dba7-4f30-92f3-7446259f59e4",
+      sequence: 1,
+      text: "x".repeat(16_001),
+    }).success,
+    false
+  );
+  assert.equal(
+    copilotStreamEventSchema.safeParse({
+      v: 1,
+      type: "done",
+      requestId: "6969d102-dba7-4f30-92f3-7446259f59e4",
+      text: "ok",
+      durationMs: 1,
+      rawError: "forbidden",
+    }).success,
+    false
+  );
 });
 
 test("serves health without details and validates only authenticated strict requests", async () => {

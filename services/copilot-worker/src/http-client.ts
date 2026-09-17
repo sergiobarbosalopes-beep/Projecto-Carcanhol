@@ -1,6 +1,7 @@
 import {
   COPILOT_WORKER_TRANSPORT_DIAGNOSTICS,
   COPILOT_INFERENCE_PATH,
+  COPILOT_STREAM_PATH,
   COPILOT_VALIDATION_PATH,
   COPILOT_WORKER_MAX_RESPONSE_BYTES,
   copilotInferenceResponseSchema,
@@ -196,6 +197,101 @@ export function createCopilotInferenceWorkerHttpClient({
           ? createTimeoutFailure(requestId)
           : createInvalidResponseFailure(requestId);
       }
+    } catch (error) {
+      return isTimeoutError(error)
+        ? createTimeoutFailure(requestId)
+        : createUnavailableFailure(
+            requestId,
+            "networkError",
+            findSafeNetworkCauseCode(error)
+          );
+    } finally {
+      body = "";
+    }
+  };
+}
+
+export function createCopilotStreamingWorkerHttpClient({
+  baseUrl,
+  hmacSecret,
+  timeoutMs,
+  fetchImpl = fetch,
+}: WorkerHttpClientOptions) {
+  const endpoint = new URL(COPILOT_STREAM_PATH, `${baseUrl}/`);
+
+  return async function stream(
+    token: string,
+    model: string,
+    prompt: string,
+    requestId: string,
+    systemPrompt?: string,
+    signal?: AbortSignal
+  ): Promise<
+    | { ok: true; requestId: string; response: Response }
+    | CopilotWorkerTransportFailure
+  > {
+    let body = JSON.stringify({
+      requestId,
+      token,
+      model,
+      prompt,
+      ...(systemPrompt ? { systemPrompt } : {}),
+    });
+    const headers = createSignedWorkerHeaders({
+      body,
+      method: "POST",
+      path: COPILOT_STREAM_PATH,
+      requestId,
+      secret: hmacSecret,
+    });
+
+    try {
+      const response = await fetchImpl(endpoint, {
+        method: "POST",
+        body,
+        cache: "no-store",
+        credentials: "omit",
+        redirect: "error",
+        signal: signal
+          ? AbortSignal.any([AbortSignal.timeout(timeoutMs), signal])
+          : AbortSignal.timeout(timeoutMs),
+        headers: {
+          ...headers,
+          Accept: "application/x-ndjson",
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (response.status === 504) {
+        return createTimeoutFailure(requestId);
+      }
+
+      if (!response.ok) {
+        if (response.status === 401 || response.status === 403) {
+          return createUnavailableFailure(requestId, "authRejected");
+        }
+
+        if (response.status === 429 || response.status === 503) {
+          return createUnavailableFailure(requestId, "rateLimited");
+        }
+
+        if (response.status >= 500 && response.status <= 599) {
+          return createUnavailableFailure(requestId, "httpUnavailable");
+        }
+
+        return createUnavailableFailure(requestId, "httpError");
+      }
+
+      if (
+        response.headers.get("content-type")?.split(";")[0]?.trim() !==
+          "application/x-ndjson" ||
+        !response.body
+      ) {
+        await response.body?.cancel();
+        return createInvalidResponseFailure(requestId);
+      }
+
+      return { ok: true, requestId, response };
     } catch (error) {
       return isTimeoutError(error)
         ? createTimeoutFailure(requestId)

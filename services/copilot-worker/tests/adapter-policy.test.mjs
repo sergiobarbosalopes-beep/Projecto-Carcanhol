@@ -211,7 +211,7 @@ test("pins the SDK and configures empty mode without logged-in fallback", () => 
   );
 });
 
-test("builds inference sessions with the trusted model and every optional capability disabled", () => {
+test("builds inference sessions with every execution capability disabled", () => {
   const token = `github_pat_${"D".repeat(40)}`;
   const sessionId = "54ec5d09-71ca-4f63-b46b-a85bbcfe03d3";
   const config = createInferenceSessionConfig(
@@ -237,6 +237,17 @@ test("builds inference sessions with the trusted model and every optional capabi
   assert.deepEqual(config.infiniteSessions, { enabled: false });
   assert.deepEqual(config.memory, { enabled: false });
   assert.equal(config.streaming, false);
+  assert.equal(config.includeSubAgentStreamingEvents, false);
+  assert.equal(
+    createInferenceSessionConfig(
+      token,
+      sessionId,
+      "claude-haiku-4.5",
+      undefined,
+      true
+    ).streaming,
+    true
+  );
 });
 
 test("runs one inference and always disconnects and deletes the session", async () => {

@@ -7,9 +7,12 @@ import {
   type SessionConfig,
 } from "@github/copilot-sdk";
 import {
+  COPILOT_INFERENCE_MAX_TEXT_LENGTH,
   copilotInferenceResponseSchema,
+  inferenceUsageSchema,
   copilotPremiumInteractionsQuotaSchema,
   type CopilotInferenceResponse,
+  type CopilotStreamEvent,
   type CopilotPremiumInteractionsQuota,
 } from "./contract";
 import type { CopilotRuntimeClient, CopilotRuntimeFactory } from "./runtime";
@@ -250,11 +253,13 @@ export function createInferenceSessionConfig(
   token: string,
   sessionId: string,
   model: string,
-  systemPrompt?: string
+  systemPrompt?: string,
+  streaming = false
 ): SessionConfig {
   return {
     ...createIsolatedSessionConfig(token, sessionId),
     model,
+    streaming,
     ...(systemPrompt
       ? {
           systemMessage: {
@@ -312,6 +317,235 @@ function createIsolatedSessionConfig(
     remoteSession: "off",
     onPermissionRequest: denyAllPermissions,
   };
+}
+
+export async function runCopilotStreamingInference({
+  token,
+  model,
+  prompt,
+  systemPrompt,
+  requestId,
+  timeoutMs,
+  signal,
+  emit,
+}: {
+  token: string;
+  model: string;
+  prompt: string;
+  systemPrompt?: string;
+  requestId: string;
+  timeoutMs: number;
+  signal: AbortSignal;
+  emit: (event: CopilotStreamEvent) => Promise<void>;
+}): Promise<void> {
+  signal.throwIfAborted();
+  const baseDirectory = await mkdtemp(
+    join(tmpdir(), "carcanhol-copilot-stream-")
+  );
+  let client: CopilotClient | null = null;
+  const startedAt = Date.now();
+
+  try {
+    await chmod(baseDirectory, 0o700);
+    signal.throwIfAborted();
+    client = new CopilotClient({
+      mode: "empty",
+      baseDirectory,
+      workingDirectory: baseDirectory,
+      useLoggedInUser: false,
+      logLevel: "none",
+      env: buildChildRuntimeEnvironment(baseDirectory),
+      builtinPluginDirectories: [],
+      enableRemoteSessions: false,
+    });
+    const activeClient = client;
+    const abortRuntime = () => void forceStop(activeClient);
+    signal.addEventListener("abort", abortRuntime, { once: true });
+
+    try {
+      await client.start();
+      signal.throwIfAborted();
+      await streamWithSession(
+        client,
+        token,
+        requestId,
+        model,
+        prompt,
+        timeoutMs,
+        signal,
+        emit,
+        startedAt,
+        systemPrompt
+      );
+    } finally {
+      signal.removeEventListener("abort", abortRuntime);
+    }
+  } finally {
+    if (client) {
+      try {
+        const cleanupErrors = await withDeadline(client.stop(), 1_500);
+
+        if (cleanupErrors.length > 0) {
+          await forceStop(client);
+        }
+      } catch {
+        await forceStop(client);
+      }
+    }
+
+    await removeTemporaryState(baseDirectory);
+  }
+}
+
+async function streamWithSession(
+  client: Pick<CopilotClient, "createSession" | "deleteSession">,
+  token: string,
+  sessionId: string,
+  model: string,
+  prompt: string,
+  timeoutMs: number,
+  signal: AbortSignal,
+  emit: (event: CopilotStreamEvent) => Promise<void>,
+  startedAt: number,
+  systemPrompt?: string
+) {
+  let session: Awaited<ReturnType<CopilotClient["createSession"]>> | null =
+    null;
+  let content = "";
+  let sequence = 0;
+  let finalContent = "";
+  let terminal = false;
+  let writeChain = Promise.resolve();
+  let writeFailure: unknown;
+
+  try {
+    session = await client.createSession(
+      createInferenceSessionConfig(token, sessionId, model, systemPrompt, true)
+    );
+    const activeSession = session;
+    const abortSession = () =>
+      void ignoreCleanupFailure(() => activeSession.abort());
+    signal.addEventListener("abort", abortSession, { once: true });
+
+    const unsubscribeDelta = activeSession.on(
+      "assistant.message_delta",
+      (event) => {
+        if (
+          terminal ||
+          event.agentId ||
+          !event.data.deltaContent ||
+          content.length + event.data.deltaContent.length >
+            COPILOT_INFERENCE_MAX_TEXT_LENGTH
+        ) {
+          if (
+            content.length + event.data.deltaContent.length >
+            COPILOT_INFERENCE_MAX_TEXT_LENGTH
+          ) {
+            terminal = true;
+            void activeSession.abort();
+          }
+          return;
+        }
+
+        content += event.data.deltaContent;
+        sequence += 1;
+        const streamEvent: CopilotStreamEvent = {
+          v: 1,
+          type: "delta",
+          requestId: sessionId,
+          sequence,
+          text: event.data.deltaContent,
+        };
+        writeChain = writeChain
+          .then(() => emit(streamEvent))
+          .catch((error: unknown) => {
+            writeFailure ??= error;
+            terminal = true;
+            void activeSession.abort();
+          });
+      }
+    );
+    const unsubscribeFinal = activeSession.on("assistant.message", (event) => {
+      if (!event.agentId) {
+        finalContent = event.data.content;
+      }
+    });
+
+    try {
+      await emit({ v: 1, type: "start", requestId: sessionId });
+      const response = await withInferenceDeadline(
+        activeSession.sendAndWait({ prompt }, timeoutMs),
+        timeoutMs,
+        signal
+      );
+      await writeChain;
+      if (writeFailure) throw writeFailure;
+      signal.throwIfAborted();
+
+      const completeText = finalContent || response?.data.content || content;
+
+      if (
+        terminal ||
+        !completeText ||
+        completeText.length > COPILOT_INFERENCE_MAX_TEXT_LENGTH
+      ) {
+        await emit({
+          v: 1,
+          type: "error",
+          requestId: sessionId,
+          code: "invalid_response",
+        });
+        return;
+      }
+
+      const metrics = await activeSession.rpc.usage.getMetrics();
+      const usage = inferenceUsageSchema.safeParse({
+        inputTokens: metrics.lastCallInputTokens,
+        outputTokens: metrics.lastCallOutputTokens,
+      });
+      await emit({
+        v: 1,
+        type: "done",
+        requestId: sessionId,
+        text: completeText,
+        ...(usage.success ? { usage: usage.data } : {}),
+        durationMs: Date.now() - startedAt,
+      });
+    } catch (error) {
+      await writeChain.catch(() => undefined);
+      await ignoreCleanupFailure(() =>
+        withDeadline(activeSession.abort(), 1_000)
+      );
+      await emit({
+        v: 1,
+        type: "error",
+        requestId: sessionId,
+        code:
+          signal.aborted && signal.reason === "disconnect"
+            ? "cancelled"
+            : error instanceof InferenceDeadlineError
+              ? "timeout"
+              : "unavailable",
+      }).catch(() => undefined);
+    } finally {
+      terminal = true;
+      unsubscribeDelta();
+      unsubscribeFinal();
+      signal.removeEventListener("abort", abortSession);
+    }
+  } finally {
+    const activeSession = session;
+
+    if (activeSession) {
+      await ignoreCleanupFailure(() =>
+        withDeadline(activeSession.disconnect(), 1_000)
+      );
+    }
+
+    await ignoreCleanupFailure(() =>
+      withDeadline(client.deleteSession(sessionId), 1_000)
+    );
+  }
 }
 
 export async function runCopilotInference({

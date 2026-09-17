@@ -1,6 +1,7 @@
 import {
   createCopilotSdkRuntime,
   runCopilotInference,
+  runCopilotStreamingInference,
 } from "./copilot-adapter";
 import { getWorkerConfig } from "./config";
 import type { SafeCopilotDiagnostic } from "./contract";
@@ -52,6 +53,22 @@ const server = createCopilotWorkerServer({
       requestId,
       timeoutMs: config.COPILOT_INFERENCE_TIMEOUT_MS,
       signal,
+    });
+  },
+  inferStream: async (
+    { requestId, token, model, prompt, systemPrompt },
+    signal,
+    emit
+  ) => {
+    await runCopilotStreamingInference({
+      token,
+      model,
+      prompt,
+      ...(systemPrompt ? { systemPrompt } : {}),
+      requestId,
+      timeoutMs: config.COPILOT_INFERENCE_TIMEOUT_MS,
+      signal,
+      emit,
     });
   },
 });

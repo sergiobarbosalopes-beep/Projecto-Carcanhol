@@ -1,12 +1,19 @@
 import { requireAuthorizedUser } from "@/src/auth/server";
-import { EmptyFeature } from "@/src/components/empty-feature";
+import { createClient } from "@/src/database/server";
+import { loadChatBootstrap } from "@/src/chat/repository";
+import { ChatWorkspace } from "./chat-workspace";
 
-export default async function ChatPage() {
-  await requireAuthorizedUser();
-  return (
-    <EmptyFeature
-      title="Chat"
-      description="Assistente para análise temática e apoio à decisão."
-    />
-  );
+export const dynamic = "force-dynamic";
+
+export default async function ChatPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ conversation?: string }>;
+}) {
+  const user = await requireAuthorizedUser();
+  const client = await createClient();
+  const { conversation } = await searchParams;
+  const bootstrap = await loadChatBootstrap(client, user.id, conversation);
+
+  return <ChatWorkspace initial={bootstrap} />;
 }
