@@ -447,7 +447,7 @@ function buildSkillSystemPrompt(skills: Skill[]) {
   );
   const result = [header, ...blocks].join("\n\n");
 
-  if (result.length > 8_000) {
+  if (result.length > 16_000) {
     throw new ChatSkillContextTooLargeError();
   }
 

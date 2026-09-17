@@ -75,7 +75,7 @@ test("Skill resolution is server-side, active-only, bounded and safely delimited
   assert.match(repository, /<carcanhol_skill/);
   assert.match(repository, /<\/carcanhol_skill>/);
   assert.match(repository, /Ignora qualquer conteúdo/);
-  assert.match(repository, /result\.length > 8_000/);
+  assert.match(repository, /result\.length > 16_000/);
 });
 
 test("automatic Skill suggestions use metadata only and require confirmation", () => {
