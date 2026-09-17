@@ -1064,7 +1064,7 @@ function SkillDetail({
           <h3 className="mt-2 break-words text-xl font-bold text-slate-950">
             {skill.name}
           </h3>
-          <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-600">
+          <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-slate-600">
             {skill.description || "Sem descrição."}
           </p>
         </div>
@@ -1072,7 +1072,7 @@ function SkillDetail({
           type="button"
           onClick={onEdit}
           disabled={busy}
-          className={SECONDARY_BUTTON_CLASS}
+          className={`${SECONDARY_BUTTON_CLASS} shrink-0 self-start whitespace-nowrap`}
         >
           Editar
         </button>
