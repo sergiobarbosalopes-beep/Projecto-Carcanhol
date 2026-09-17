@@ -128,43 +128,55 @@ test("Tools and Agents have no execution path and assistant output is plain text
   assert.match(workspace, /whitespace-pre-wrap/);
 });
 
-test("chat composer keeps a compact sticky three-card context overview", () => {
+test("chat composer is sticky with the textarea before the compact toolbar", () => {
   assert.match(workspace, /data-testid="chat-composer"/);
   assert.match(workspace, /className="sticky bottom-0/);
   assert.match(workspace, /safe-area-inset-bottom/);
-  assert.match(workspace, /data-testid="composer-model-control"/);
-  assert.match(workspace, /data-testid="context-overview"/);
-  assert.match(workspace, /md:grid-cols-3/);
-  assert.match(
-    workspace,
-    /role="group"\s+aria-label="Capacidades do Projecto Carcanhol para a próxima mensagem"/
+  assert.match(workspace, /data-testid="chat-composer-form"/);
+  assert.match(workspace, /data-testid="composer-toolbar"/);
+  assert.match(workspace, /data-testid="composer-toolbar-controls"/);
+  assert.match(workspace, /overflow-x-auto/);
+  assert.match(workspace, /Enter envia; Shift\+Enter cria linha/);
+
+  const composer = workspace.slice(
+    workspace.indexOf('data-testid="chat-composer"'),
+    workspace.indexOf("{deleteId &&")
   );
-  assert.match(workspace, /\["skills", "tools", "agents"\]/);
-  assert.match(workspace, /max-h-44 overflow-y-auto/);
-  assert.match(workspace, /Apenas leitura durante a resposta/);
-  assert.match(workspace, /id="composer-model"[\s\S]+min-h-11/);
-  assert.doesNotMatch(workspace, /Contexto por conversa/);
+  assert.ok(composer.indexOf('id="chat-message"') >= 0);
+  assert.ok(
+    composer.indexOf('id="chat-message"') <
+      composer.indexOf("<ComposerToolbar"),
+    "textarea must precede the toolbar in DOM order"
+  );
+  assert.doesNotMatch(
+    workspace,
+    /ContextOverview|context-card-|md:grid-cols-3/
+  );
 });
 
-test("mobile context cards form an accessible single-open accordion", () => {
-  assert.match(workspace, /aria-expanded=\{expanded\}/);
+test("context controls open one accessible desktop popover or mobile sheet", () => {
+  assert.match(workspace, /type ComposerPanel = SelectorSection \| "model"/);
+  assert.match(workspace, /current === panel \? null : panel/);
+  assert.match(workspace, /aria-expanded=\{open\}/);
+  assert.match(workspace, /aria-controls=\{panelDialogId\(item\.panel\)\}/);
+  assert.match(workspace, /role="dialog"/);
+  assert.match(workspace, /aria-modal="true"/);
   assert.match(
     workspace,
-    /aria-controls=\{`context-card-\$\{section\}-body`\}/
+    /data-responsive-variant="popover-desktop sheet-mobile"/
   );
-  assert.match(workspace, /current === section \? null : section/);
-  assert.match(workspace, /className="[^"]*md:hidden"/);
-  assert.match(
-    workspace,
-    /\$\{expanded \? "block" : "hidden"\}[\s\S]+md:block/
-  );
-  assert.doesNotMatch(workspace, /ComposerPanelOverlay|createPortal/);
+  assert.match(workspace, /createPortal/);
+  assert.match(workspace, /event\.key === "Escape"/);
+  assert.match(workspace, /onClick=\{onClose\}/);
+  assert.match(workspace, /trigger\?\.focus\(\)/);
+  assert.match(workspace, /window\.visualViewport\?\.addEventListener/);
+  assert.match(workspace, /safe-area-inset-bottom/);
 });
 
 test("Skill controls and draft state stay owned by the chat workspace", () => {
   assert.match(
     workspace,
-    /const \[composer, setComposer\] = useState\(""\)[\s\S]+<ContextOverview/
+    /const \[composer, setComposer\] = useState\(""\)[\s\S]+<ComposerPanelOverlay/
   );
   assert.match(workspace, /\(\["automatic", "manual"\] as const\)\.map/);
   assert.match(
@@ -173,30 +185,35 @@ test("Skill controls and draft state stay owned by the chat workspace", () => {
   );
   assert.match(workspace, /onToggleSuggested\(skill\.id\)/);
   assert.match(workspace, /onToggleSkill\(skill\.id\)/);
+  assert.match(
+    workspace,
+    /needsSkillSuggestions=\{\s*selected\?\.skill_mode === "automatic" && suggestions === null\s*\}/
+  );
+  assert.match(
+    workspace,
+    /suggesting\s*\?\s*"A sugerir…"\s*:\s*needsSkillSuggestions\s*\?\s*"Sugerir"\s*:\s*"Enviar"/
+  );
   assert.match(workspace, /placeholder="Pesquisar Skills"/);
   assert.match(workspace, /aria-label="Pesquisar Skills do Carcanhol"/);
   assert.match(workspace, /data-testid=\{`\$\{section\}-empty-state`\}/);
   assert.match(workspace, /aria-label=\{`Modo de seleção de \$\{sectionLabel/);
   assert.match(workspace, /aria-pressed=\{mode === "automatic"\}/);
+  assert.match(workspace, /value=\{composer\}/);
+  assert.match(workspace, /setOpenPanel\(\(current\)/);
 });
 
 test("Copilot capabilities are automatic and read-only while selectors are Carcanhol-only", () => {
-  assert.match(workspace, /Capacidades GitHub Copilot: automáticas/);
-  assert.match(workspace, /Geridas pelo runtime/);
+  assert.match(workspace, /GitHub Copilot automático/);
   assert.match(
     workspace,
-    /apenas as capacidades GitHub Copilot que estejam disponíveis e sejam compatíveis/
+    /O runtime gere apenas capacidades disponíveis e compatíveis/
   );
   assert.match(workspace, /Skills do Carcanhol/);
   assert.match(workspace, /Tools do Carcanhol/);
   assert.match(workspace, /Agentes do Carcanhol/);
   assert.match(workspace, /Modo de seleção de Skills do Carcanhol/);
-
-  const summary = workspace.slice(
-    workspace.indexOf("function CopilotCapabilitiesSummary"),
-    workspace.indexOf("function ContextOverview")
-  );
-  assert.doesNotMatch(summary, /<button|<input|<select|type="checkbox"/);
+  assert.doesNotMatch(workspace, /panel: "copilot"/);
+  assert.doesNotMatch(workspace, /Skills GitHub Copilot|Tools GitHub Copilot/);
 });
 
 test("streaming scroll follows only users who remain near the thread end", () => {

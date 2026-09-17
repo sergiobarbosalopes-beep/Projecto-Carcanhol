@@ -52,9 +52,14 @@ triggers globais em `auth.users` e não concedem membership automaticamente.
 - resolução server-only de Skills `active` para contexto textual delimitado;
 - Chat responsivo com conversas RLS, rename/delete cascade, respostas
   progressivas canceláveis e estados completos/cancelados/falhados explícitos;
+- composer sticky com textarea imediatamente após o histórico e toolbar
+  compacta para conta/modelo e capacidades, sem painel permanente entre
+  mensagens e input;
 - seletor de Skills do Carcanhol por conversa, manual ou automático confirmado,
-  e auditoria por resposta com ID, nome, `updated_at` usado como versão e
-  SHA-256 do conteúdo; Tools/Agentes do Carcanhol não são executáveis;
+  aberto em popover ancorado no desktop e bottom sheet no mobile, e auditoria
+  por resposta com ID, nome, `updated_at` usado como versão e SHA-256 do
+  conteúdo; Tools/Agentes do Carcanhol usam o mesmo detalhe, mas permanecem
+  estados vazios não executáveis;
 - resumo read-only das capacidades GitHub Copilot: o runtime gere
   automaticamente apenas as que estejam disponíveis e sejam compatíveis, sem
   expor internals, permissões ou seleção manual;

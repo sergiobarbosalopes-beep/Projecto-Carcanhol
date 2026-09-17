@@ -6,8 +6,10 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type CSSProperties,
   type FormEvent,
 } from "react";
+import { createPortal } from "react-dom";
 import type {
   ChatBootstrap,
   ChatModelOption,
@@ -22,6 +24,7 @@ import type {
 
 type Suggestion = { id: string; reason: string };
 type SelectorSection = "skills" | "tools" | "agents";
+type ComposerPanel = SelectorSection | "model";
 
 export function ChatWorkspace({ initial }: { initial: ChatBootstrap }) {
   const [conversations, setConversations] = useState(initial.conversations);
@@ -30,8 +33,7 @@ export function ChatWorkspace({ initial }: { initial: ChatBootstrap }) {
   const [models] = useState(initial.models);
   const [skills] = useState(initial.skills);
   const [composer, setComposer] = useState("");
-  const [expandedSection, setExpandedSection] =
-    useState<SelectorSection | null>(null);
+  const [openPanel, setOpenPanel] = useState<ComposerPanel | null>(null);
   const [suggestions, setSuggestions] = useState<Suggestion[] | null>(null);
   const [suggestedIds, setSuggestedIds] = useState<string[]>([]);
   const [suggesting, setSuggesting] = useState(false);
@@ -72,6 +74,7 @@ export function ChatWorkspace({ initial }: { initial: ChatBootstrap }) {
     userNearBottomRef.current =
       thread.scrollHeight - thread.scrollTop - thread.clientHeight < 120;
   }, []);
+  const closeComposerPanel = useCallback(() => setOpenPanel(null), []);
 
   async function refreshConversation(conversationId: string) {
     if (streaming || conversationId === selectedId) return;
@@ -94,7 +97,7 @@ export function ChatWorkspace({ initial }: { initial: ChatBootstrap }) {
     setMessages(result.data.messages);
     setSuggestions(null);
     setSuggestedIds([]);
-    setExpandedSection(null);
+    setOpenPanel(null);
     window.history.replaceState(
       null,
       "",
@@ -122,7 +125,7 @@ export function ChatWorkspace({ initial }: { initial: ChatBootstrap }) {
     setSelectedId(result.data.id);
     setMessages([]);
     setComposer("");
-    setExpandedSection(null);
+    setOpenPanel(null);
     setSuggestions(null);
     setSuggestedIds([]);
     window.history.replaceState(
@@ -286,6 +289,7 @@ export function ChatWorkspace({ initial }: { initial: ChatBootstrap }) {
     abortRef.current = controller;
     userNearBottomRef.current = true;
     setStreaming(true);
+    setOpenPanel(null);
     setFeedback("");
     setSuggestions(null);
     setSuggestedIds([]);
@@ -601,49 +605,14 @@ export function ChatWorkspace({ initial }: { initial: ChatBootstrap }) {
         </div>
 
         <div
-          className="sticky bottom-0 z-10 border-t border-slate-200 bg-white/95 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 shadow-[0_-8px_24px_-20px_rgba(15,23,42,0.7)] backdrop-blur sm:px-4"
+          className="sticky bottom-0 z-10 border-t border-slate-200 bg-white/95 px-3 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 shadow-[0_-8px_24px_-20px_rgba(15,23,42,0.7)] backdrop-blur sm:px-4"
           data-testid="chat-composer"
         >
-          <ModelControl
-            selectedModel={selectedModel}
-            conversation={selected}
-            models={models}
-            streaming={streaming}
-            onModelChange={changeModel}
-          />
-          <CopilotCapabilitiesSummary />
-          <ContextOverview
-            expandedSection={expandedSection}
-            conversation={selected}
-            skills={skills}
-            suggestedIds={suggestedIds}
-            suggestions={suggestions}
-            disabled={streaming}
-            onExpandedSectionChange={(section) =>
-              setExpandedSection((current) =>
-                current === section ? null : section
-              )
-            }
-            onModeChange={changeSkillMode}
-            onToggleSkill={toggleSkill}
-            onToggleSuggested={(id) =>
-              setSuggestedIds((current) =>
-                current.includes(id)
-                  ? current.filter((item) => item !== id)
-                  : [...current, id]
-              )
-            }
-          />
-          {feedback && (
-            <p
-              role="alert"
-              className="mt-2 text-sm font-semibold text-rose-700"
-            >
-              {feedback}
-            </p>
-          )}
-
-          <form onSubmit={handleSend} className="mt-2 flex items-end gap-2">
+          <form
+            onSubmit={handleSend}
+            className="space-y-2"
+            data-testid="chat-composer-form"
+          >
             <label className="sr-only" htmlFor="chat-message">
               Mensagem
             </label>
@@ -665,35 +634,57 @@ export function ChatWorkspace({ initial }: { initial: ChatBootstrap }) {
                 }
               }}
               placeholder="Escreva uma mensagem…"
-              className="min-h-14 max-h-40 min-w-0 flex-1 resize-y rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-teal-700 focus:ring-2 focus:ring-teal-700/20"
+              className="min-h-16 max-h-40 w-full resize-y rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-teal-700 focus:ring-2 focus:ring-teal-700/20"
             />
-            {streaming ? (
-              <button
-                type="button"
-                onClick={() => abortRef.current?.abort()}
-                className="min-h-11 shrink-0 rounded-xl bg-rose-700 px-3 text-sm font-bold text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-700 sm:px-4"
-              >
-                Cancelar
-              </button>
-            ) : (
-              <button
-                type="submit"
-                disabled={
-                  !selected || !selectedModel || !composer.trim() || suggesting
-                }
-                className="min-h-11 shrink-0 rounded-xl bg-teal-700 px-3 text-sm font-bold text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-700 disabled:cursor-not-allowed disabled:opacity-50 sm:px-5"
-              >
-                {suggesting
-                  ? "A sugerir…"
-                  : selected?.skill_mode === "automatic" && suggestions === null
-                    ? "Sugerir Skills do Carcanhol"
-                    : "Enviar"}
-              </button>
-            )}
+            <ComposerToolbar
+              openPanel={openPanel}
+              selectedModel={selectedModel}
+              conversation={selected}
+              composerLength={composer.length}
+              streaming={streaming}
+              suggesting={suggesting}
+              needsSkillSuggestions={
+                selected?.skill_mode === "automatic" && suggestions === null
+              }
+              canSend={Boolean(selected && selectedModel && composer.trim())}
+              onOpenPanel={(panel) =>
+                setOpenPanel((current) => (current === panel ? null : panel))
+              }
+              onCancel={() => abortRef.current?.abort()}
+            />
           </form>
-          <p className="mt-1 text-right text-xs text-slate-400">
-            {composer.length}/4000 · Enter envia, Shift+Enter cria linha
-          </p>
+          {feedback && (
+            <p
+              role="alert"
+              className="mt-2 text-sm font-semibold text-rose-700"
+            >
+              {feedback}
+            </p>
+          )}
+
+          {openPanel && (
+            <ComposerPanelOverlay
+              panel={openPanel}
+              conversation={selected}
+              selectedModel={selectedModel}
+              models={models}
+              skills={skills}
+              suggestedIds={suggestedIds}
+              suggestions={suggestions}
+              disabled={streaming}
+              onClose={closeComposerPanel}
+              onModelChange={changeModel}
+              onModeChange={changeSkillMode}
+              onToggleSkill={toggleSkill}
+              onToggleSuggested={(id) =>
+                setSuggestedIds((current) =>
+                  current.includes(id)
+                    ? current.filter((item) => item !== id)
+                    : [...current, id]
+                )
+              }
+            />
+          )}
         </div>
       </section>
 
@@ -735,171 +726,387 @@ export function ChatWorkspace({ initial }: { initial: ChatBootstrap }) {
   );
 }
 
-function ModelControl({
+function ComposerToolbar({
+  openPanel,
   selectedModel,
   conversation,
-  models,
+  composerLength,
   streaming,
-  onModelChange,
+  suggesting,
+  needsSkillSuggestions,
+  canSend,
+  onOpenPanel,
+  onCancel,
 }: {
+  openPanel: ComposerPanel | null;
   selectedModel: ChatModelOption | null;
   conversation: ChatConversation | null;
-  models: ChatModelOption[];
+  composerLength: number;
   streaming: boolean;
-  onModelChange: (id: string) => void;
+  suggesting: boolean;
+  needsSkillSuggestions: boolean;
+  canSend: boolean;
+  onOpenPanel: (panel: ComposerPanel) => void;
+  onCancel: () => void;
 }) {
+  const skillSummary =
+    conversation?.skill_mode === "automatic"
+      ? "Skills: Automático"
+      : `Skills: ${conversation?.selected_skill_ids.length ?? 0}`;
+  const items: Array<{
+    panel: ComposerPanel;
+    label: string;
+    fullLabel: string;
+  }> = [
+    {
+      panel: "model",
+      label: selectedModel?.modelName ?? "Sem modelo",
+      fullLabel: selectedModel
+        ? `Conta e modelo: ${providerLabel(selectedModel.provider)}, ${
+            selectedModel.accountName
+          }, ${selectedModel.modelName}${
+            streaming ? ". Apenas leitura durante a resposta" : ""
+          }`
+        : "Conta e modelo: nenhum modelo disponível",
+    },
+    {
+      panel: "skills",
+      label: skillSummary,
+      fullLabel: `${skillSummary} do Carcanhol. Abrir configuração${
+        streaming ? ". Apenas leitura durante a resposta" : ""
+      }`,
+    },
+    {
+      panel: "tools",
+      label: "Tools: Automático · 0",
+      fullLabel: `Tools do Carcanhol: Automático, 0 disponíveis${
+        streaming ? ". Apenas leitura durante a resposta" : ""
+      }`,
+    },
+    {
+      panel: "agents",
+      label: "Agentes: Automático · 0",
+      fullLabel: `Agentes do Carcanhol: Automático, 0 disponíveis${
+        streaming ? ". Apenas leitura durante a resposta" : ""
+      }`,
+    },
+  ];
+
   return (
     <div
-      className="mb-2 flex min-w-0 flex-wrap items-center gap-2"
-      data-testid="composer-model-control"
+      className="flex min-w-0 items-center gap-2"
+      role="group"
+      aria-label={`Configuração da próxima mensagem${
+        streaming ? ". Apenas leitura durante a resposta" : ""
+      }`}
+      data-testid="composer-toolbar"
     >
-      <label
-        htmlFor="composer-model"
-        className="shrink-0 text-xs font-bold text-slate-600"
+      <div
+        className="-mx-1 flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto px-1 pb-1 [scrollbar-width:thin]"
+        data-testid="composer-toolbar-controls"
       >
-        Modelo
-      </label>
-      <select
-        id="composer-model"
-        value={selectedModel?.id ?? ""}
-        title={
-          selectedModel
-            ? `${providerLabel(selectedModel.provider)} · ${
-                selectedModel.accountName
-              } · ${selectedModel.modelName}`
-            : "Sem modelo disponível"
-        }
-        aria-label="Conta e modelo para a próxima mensagem"
-        disabled={!conversation || streaming || models.length === 0}
-        onChange={(event) => onModelChange(event.target.value)}
-        className="min-h-11 min-w-0 flex-1 truncate rounded-lg border border-slate-300 bg-white px-3 text-sm outline-none focus:border-teal-700 focus:ring-2 focus:ring-teal-700/20 disabled:cursor-not-allowed disabled:bg-slate-100"
-      >
-        {models.length === 0 && (
-          <option value="">Sem predefinição LLM ativa</option>
-        )}
-        {models.map((model) => (
-          <option key={model.id} value={model.id}>
-            {model.modelName} · {providerLabel(model.provider)} ·{" "}
-            {model.accountName}
-          </option>
+        {items.slice(0, 1).map((item) => (
+          <ToolbarButton
+            key={item.panel}
+            item={item}
+            open={openPanel === item.panel}
+            onOpen={onOpenPanel}
+          />
         ))}
-      </select>
-      {streaming && (
-        <span className="w-full text-right text-xs text-slate-500">
-          Apenas leitura durante a resposta
+        <span
+          className="flex min-h-11 max-w-[13rem] shrink-0 items-center rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-xs font-semibold text-slate-600"
+          role="status"
+          aria-label="Capacidades GitHub Copilot: automáticas. O runtime gere apenas capacidades disponíveis e compatíveis; este indicador não ativa capacidades."
+          title="O runtime gere automaticamente apenas capacidades GitHub Copilot disponíveis e compatíveis. Sem seleção manual."
+          data-testid="copilot-capabilities-summary"
+        >
+          <span className="truncate">GitHub Copilot automático</span>
         </span>
+        {items.slice(1).map((item) => (
+          <ToolbarButton
+            key={item.panel}
+            item={item}
+            open={openPanel === item.panel}
+            onOpen={onOpenPanel}
+          />
+        ))}
+      </div>
+      <span
+        className="shrink-0 text-[11px] tabular-nums text-slate-400"
+        aria-label={`${composerLength} de 4000 caracteres`}
+      >
+        {composerLength}/4000
+      </span>
+      {streaming ? (
+        <button
+          type="button"
+          onClick={onCancel}
+          className="min-h-11 shrink-0 rounded-lg bg-rose-700 px-3 text-sm font-bold text-white outline-none focus-visible:ring-2 focus-visible:ring-rose-700 focus-visible:ring-offset-2"
+        >
+          Cancelar
+        </button>
+      ) : (
+        <button
+          type="submit"
+          disabled={!canSend || suggesting}
+          title="Enter envia; Shift+Enter cria linha"
+          className="min-h-11 shrink-0 rounded-lg bg-teal-700 px-3 text-sm font-bold text-white outline-none focus-visible:ring-2 focus-visible:ring-teal-700 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 sm:px-4"
+        >
+          {suggesting
+            ? "A sugerir…"
+            : needsSkillSuggestions
+              ? "Sugerir"
+              : "Enviar"}
+        </button>
       )}
     </div>
   );
 }
 
-function CopilotCapabilitiesSummary() {
-  const description =
-    "O runtime gere automaticamente apenas as capacidades GitHub Copilot que estejam disponíveis e sejam compatíveis. Este controlo não expõe permissões nem ativa novas capacidades.";
-
+function ToolbarButton({
+  item,
+  open,
+  onOpen,
+}: {
+  item: { panel: ComposerPanel; label: string; fullLabel: string };
+  open: boolean;
+  onOpen: (panel: ComposerPanel) => void;
+}) {
   return (
-    <div
-      className="mb-2 flex min-w-0 flex-wrap items-center justify-between gap-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs"
-      role="status"
-      aria-label={`Capacidades GitHub Copilot: automáticas. ${description}`}
-      title={description}
-      data-testid="copilot-capabilities-summary"
+    <button
+      id={panelTriggerId(item.panel)}
+      type="button"
+      title={item.fullLabel}
+      aria-label={item.fullLabel}
+      aria-expanded={open}
+      aria-controls={panelDialogId(item.panel)}
+      onClick={() => onOpen(item.panel)}
+      className={`flex min-h-11 max-w-[13rem] shrink-0 items-center rounded-lg border px-2.5 text-xs font-bold outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-teal-700 focus-visible:ring-offset-2 motion-reduce:transition-none ${
+        open
+          ? "border-teal-700 bg-teal-50 text-teal-900"
+          : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50"
+      }`}
     >
-      <span className="font-bold text-slate-700">
-        Capacidades GitHub Copilot: automáticas
-      </span>
-      <span className="text-slate-500">Geridas pelo runtime</span>
-    </div>
+      <span className="truncate">{item.label}</span>
+    </button>
   );
 }
 
-function ContextOverview({
-  expandedSection,
+function ComposerPanelOverlay({
+  panel,
   conversation,
+  selectedModel,
+  models,
   skills,
   suggestions,
   suggestedIds,
   disabled,
-  onExpandedSectionChange,
+  onClose,
+  onModelChange,
   onModeChange,
   onToggleSkill,
   onToggleSuggested,
 }: {
-  expandedSection: SelectorSection | null;
+  panel: ComposerPanel;
   conversation: ChatConversation | null;
+  selectedModel: ChatModelOption | null;
+  models: ChatModelOption[];
   skills: ChatSkillOption[];
   suggestions: Suggestion[] | null;
   suggestedIds: string[];
   disabled: boolean;
-  onExpandedSectionChange: (section: SelectorSection) => void;
+  onClose: () => void;
+  onModelChange: (id: string) => void;
   onModeChange: (mode: ChatSkillMode) => void;
   onToggleSkill: (id: string) => void;
   onToggleSuggested: (id: string) => void;
 }) {
-  const sections: SelectorSection[] = ["skills", "tools", "agents"];
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const [anchorStyle, setAnchorStyle] = useState<CSSProperties>({});
+  const title = panel === "model" ? "Conta e modelo" : sectionLabel(panel);
 
-  return (
+  useLayoutEffect(() => {
+    const trigger = document.getElementById(panelTriggerId(panel));
+    const background = trigger?.closest<HTMLElement>("section");
+    const previousOverflow = document.body.style.overflow;
+
+    function updateAnchor() {
+      const rect = trigger?.getBoundingClientRect();
+      if (!rect) return;
+      const visualViewport = window.visualViewport;
+      const viewportHeight = visualViewport?.height ?? window.innerHeight;
+      const viewportTop = visualViewport?.offsetTop ?? 0;
+      const panelWidth = Math.min(512, window.innerWidth - 32);
+      const left = Math.min(
+        Math.max(16, rect.left),
+        window.innerWidth - panelWidth - 16
+      );
+      setAnchorStyle({
+        "--composer-panel-left": `${left}px`,
+        "--composer-panel-bottom": `${window.innerHeight - rect.top + 8}px`,
+        "--composer-panel-height": `${Math.max(
+          120,
+          Math.min(rect.top - 24, viewportHeight * 0.78, 672)
+        )}px`,
+        "--composer-sheet-bottom": `${
+          window.innerHeight - viewportTop - viewportHeight
+        }px`,
+        "--composer-sheet-height": `${Math.min(viewportHeight * 0.78, 672)}px`,
+      } as CSSProperties);
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+
+      if (event.key !== "Tab" || !dialogRef.current) return;
+      const focusable = Array.from(
+        dialogRef.current.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        )
+      );
+      const first = focusable[0];
+      const last = focusable.at(-1);
+      if (!first || !last) return;
+
+      if (!dialogRef.current.contains(document.activeElement)) {
+        event.preventDefault();
+        first.focus();
+      } else if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.body.style.overflow = "hidden";
+    if (background) background.inert = true;
+    updateAnchor();
+    const resizeObserver =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(updateAnchor);
+    if (trigger) resizeObserver?.observe(trigger);
+    window.addEventListener("resize", updateAnchor);
+    window.addEventListener("scroll", updateAnchor, true);
+    window.visualViewport?.addEventListener("resize", updateAnchor);
+    window.visualViewport?.addEventListener("scroll", updateAnchor);
+    document.addEventListener("keydown", handleKeyDown);
+    requestAnimationFrame(() => {
+      focusPanelControl(dialogRef.current);
+    });
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      if (background) background.inert = false;
+      resizeObserver?.disconnect();
+      window.removeEventListener("resize", updateAnchor);
+      window.removeEventListener("scroll", updateAnchor, true);
+      window.visualViewport?.removeEventListener("resize", updateAnchor);
+      window.visualViewport?.removeEventListener("scroll", updateAnchor);
+      document.removeEventListener("keydown", handleKeyDown);
+      trigger?.focus();
+    };
+  }, [onClose, panel]);
+
+  useEffect(() => {
+    if (!dialogRef.current?.contains(document.activeElement)) {
+      focusPanelControl(dialogRef.current);
+    }
+  }, [disabled]);
+
+  return createPortal(
     <div
-      className="grid gap-2 md:grid-cols-3"
-      role="group"
-      aria-label="Capacidades do Projecto Carcanhol para a próxima mensagem"
-      data-testid="context-overview"
+      className="fixed inset-0 z-50 bg-slate-950/40 md:bg-transparent"
+      data-testid="composer-panel-overlay"
     >
-      {sections.map((section) => {
-        const expanded = expandedSection === section;
-        const summary =
-          section === "skills"
-            ? conversation?.skill_mode === "automatic"
-              ? "Automático"
-              : `${conversation?.selected_skill_ids.length ?? 0} selecionada(s)`
-            : "Automático · 0 disponíveis";
-
-        return (
-          <section
-            key={section}
-            className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-50"
-            data-testid={`context-card-${section}`}
+      <button
+        type="button"
+        className="absolute inset-0 cursor-default"
+        aria-label={`Fechar painel ${title}`}
+        onClick={onClose}
+        tabIndex={-1}
+      />
+      <div
+        ref={dialogRef}
+        id={panelDialogId(panel)}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={`${panelDialogId(panel)}-title`}
+        style={anchorStyle}
+        className="fixed inset-x-0 bottom-[var(--composer-sheet-bottom,0px)] flex max-h-[var(--composer-sheet-height,78dvh)] flex-col rounded-t-2xl bg-white shadow-2xl outline-none md:inset-x-auto md:bottom-[var(--composer-panel-bottom)] md:left-[var(--composer-panel-left)] md:max-h-[var(--composer-panel-height)] md:w-[min(32rem,calc(100vw-2rem))] md:rounded-2xl md:border md:border-slate-200"
+        data-responsive-variant="popover-desktop sheet-mobile"
+      >
+        <div className="flex min-h-14 shrink-0 items-center justify-between gap-3 border-b border-slate-100 px-4">
+          <div className="min-w-0">
+            <h2
+              id={`${panelDialogId(panel)}-title`}
+              className="truncate font-bold text-slate-950"
+            >
+              {title}
+            </h2>
+            {disabled && (
+              <p className="text-xs text-slate-500">
+                Apenas leitura enquanto a resposta está em curso.
+              </p>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="min-h-11 shrink-0 rounded-lg px-3 text-sm font-bold text-slate-600 outline-none hover:bg-slate-100 focus-visible:ring-2 focus-visible:ring-teal-700"
           >
-            <button
-              type="button"
-              aria-expanded={expanded}
-              aria-controls={`context-card-${section}-body`}
-              onClick={() => onExpandedSectionChange(section)}
-              className="flex min-h-11 w-full items-center justify-between gap-3 px-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-700 md:hidden"
-            >
-              <span className="font-bold text-slate-900">
-                {sectionLabel(section)}
+            Fechar
+          </button>
+        </div>
+        <div className="min-h-0 overflow-y-auto overscroll-contain p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+          {panel === "model" ? (
+            <label className="block text-sm font-bold text-slate-700">
+              Conta e modelo
+              <select
+                data-autofocus
+                value={selectedModel?.id ?? ""}
+                aria-label="Conta e modelo para a próxima mensagem"
+                disabled={!conversation || disabled || models.length === 0}
+                onChange={(event) => onModelChange(event.target.value)}
+                className="mt-2 min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-normal outline-none focus:border-teal-700 focus:ring-2 focus:ring-teal-700/20 disabled:cursor-not-allowed disabled:bg-slate-100"
+              >
+                {models.length === 0 && (
+                  <option value="">Sem predefinição LLM ativa</option>
+                )}
+                {models.map((model) => (
+                  <option key={model.id} value={model.id}>
+                    {providerLabel(model.provider)} · {model.accountName} ·{" "}
+                    {model.modelName}
+                  </option>
+                ))}
+              </select>
+              <span className="mt-2 block text-xs font-normal text-slate-500">
+                A escolha aplica-se à próxima mensagem desta conversa.
               </span>
-              <span className="text-right text-xs text-slate-500">
-                {summary}
-              </span>
-            </button>
-            <div className="hidden min-h-11 items-center justify-between gap-2 border-b border-slate-200 px-3 md:flex">
-              <h2 className="font-bold text-slate-900">
-                {sectionLabel(section)}
-              </h2>
-              <p className="text-right text-xs text-slate-500">{summary}</p>
-            </div>
-            <div
-              id={`context-card-${section}-body`}
-              className={`${expanded ? "block" : "hidden"} max-h-44 overflow-y-auto overscroll-contain border-t border-slate-200 p-2 md:block md:border-t-0`}
-            >
-              <SelectorPanel
-                section={section}
-                conversation={conversation}
-                skills={skills}
-                suggestedIds={suggestedIds}
-                suggestions={suggestions}
-                disabled={disabled}
-                onModeChange={onModeChange}
-                onToggleSkill={onToggleSkill}
-                onToggleSuggested={onToggleSuggested}
-              />
-            </div>
-          </section>
-        );
-      })}
-    </div>
+            </label>
+          ) : (
+            <SelectorPanel
+              section={panel}
+              conversation={conversation}
+              skills={skills}
+              suggestedIds={suggestedIds}
+              suggestions={suggestions}
+              disabled={disabled}
+              onModeChange={onModeChange}
+              onToggleSkill={onToggleSkill}
+              onToggleSuggested={onToggleSuggested}
+            />
+          )}
+        </div>
+      </div>
+    </div>,
+    document.body
   );
 }
 
@@ -977,6 +1184,9 @@ function SelectorPanel({
             <button
               key={mode}
               type="button"
+              data-autofocus={
+                conversation?.skill_mode === mode ? true : undefined
+              }
               aria-pressed={conversation?.skill_mode === mode}
               disabled={!conversation || disabled}
               onClick={() => onModeChange(mode)}
@@ -1239,6 +1449,24 @@ function sectionLabel(section: SelectorSection) {
     : section === "tools"
       ? "Tools do Carcanhol"
       : "Agentes do Carcanhol";
+}
+
+function panelTriggerId(panel: ComposerPanel) {
+  return `composer-${panel}-trigger`;
+}
+
+function panelDialogId(panel: ComposerPanel) {
+  return `composer-${panel}-panel`;
+}
+
+function focusPanelControl(dialog: HTMLElement | null) {
+  const preferred = dialog?.querySelector<HTMLElement>(
+    "[data-autofocus]:not([disabled])"
+  );
+  const fallback = dialog?.querySelector<HTMLElement>(
+    'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+  );
+  (preferred ?? fallback)?.focus();
 }
 
 async function apiRequest<T>(
