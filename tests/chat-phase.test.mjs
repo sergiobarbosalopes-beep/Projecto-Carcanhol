@@ -128,39 +128,43 @@ test("Tools and Agents have no execution path and assistant output is plain text
   assert.match(workspace, /whitespace-pre-wrap/);
 });
 
-test("chat composer keeps context compact, sticky and readable while streaming", () => {
+test("chat composer keeps a compact sticky three-card context overview", () => {
   assert.match(workspace, /data-testid="chat-composer"/);
   assert.match(workspace, /className="sticky bottom-0/);
   assert.match(workspace, /safe-area-inset-bottom/);
-  assert.match(workspace, /data-testid="composer-toolbar"/);
-  assert.match(workspace, /Skills: Automático/);
-  assert.match(workspace, /Tools: Automático/);
-  assert.match(workspace, /Agente: Automático/);
-  assert.match(workspace, /Apenas leitura enquanto a resposta está em curso/);
-  assert.match(workspace, /disabled=\{streaming\}/);
+  assert.match(workspace, /data-testid="composer-model-control"/);
+  assert.match(workspace, /data-testid="context-overview"/);
+  assert.match(workspace, /md:grid-cols-3/);
+  assert.match(
+    workspace,
+    /role="group"\s+aria-label="Contexto da próxima mensagem"/
+  );
+  assert.match(workspace, /\["skills", "tools", "agents"\]/);
+  assert.match(workspace, /max-h-44 overflow-y-auto/);
+  assert.match(workspace, /Apenas leitura durante a resposta/);
+  assert.match(workspace, /id="composer-model"[\s\S]+min-h-11/);
   assert.doesNotMatch(workspace, /Contexto por conversa/);
 });
 
-test("composer selectors expose accessible popovers and mobile sheets", () => {
-  assert.match(workspace, /aria-expanded=\{openPanel === item\.panel\}/);
-  assert.match(workspace, /aria-controls=\{panelDialogId\(item\.panel\)\}/);
-  assert.match(workspace, /role="dialog"/);
-  assert.match(workspace, /aria-modal="true"/);
-  assert.match(workspace, /event\.key === "Escape"/);
-  assert.match(workspace, /event\.key !== "Tab"/);
-  assert.match(workspace, /trigger\?\.focus\(\)/);
-  assert.match(workspace, /onClick=\{onClose\}/);
+test("mobile context cards form an accessible single-open accordion", () => {
+  assert.match(workspace, /aria-expanded=\{expanded\}/);
   assert.match(
     workspace,
-    /data-responsive-variant="popover-desktop sheet-mobile"/
+    /aria-controls=\{`context-card-\$\{section\}-body`\}/
   );
-  assert.match(workspace, /md:bottom-\[var\(--composer-panel-bottom\)\]/);
+  assert.match(workspace, /current === section \? null : section/);
+  assert.match(workspace, /className="[^"]*md:hidden"/);
+  assert.match(
+    workspace,
+    /\$\{expanded \? "block" : "hidden"\}[\s\S]+md:block/
+  );
+  assert.doesNotMatch(workspace, /ComposerPanelOverlay|createPortal/);
 });
 
 test("Skill controls and draft state stay owned by the chat workspace", () => {
   assert.match(
     workspace,
-    /const \[composer, setComposer\] = useState\(""\)[\s\S]+<ComposerPanelOverlay/
+    /const \[composer, setComposer\] = useState\(""\)[\s\S]+<ContextOverview/
   );
   assert.match(workspace, /\(\["automatic", "manual"\] as const\)\.map/);
   assert.match(
@@ -171,6 +175,8 @@ test("Skill controls and draft state stay owned by the chat workspace", () => {
   assert.match(workspace, /onToggleSkill\(skill\.id\)/);
   assert.match(workspace, /placeholder="Pesquisar Skills"/);
   assert.match(workspace, /data-testid=\{`\$\{section\}-empty-state`\}/);
+  assert.match(workspace, /aria-label=\{`Modo de seleção de \$\{sectionLabel/);
+  assert.match(workspace, /aria-pressed=\{mode === "automatic"\}/);
 });
 
 test("streaming scroll follows only users who remain near the thread end", () => {
@@ -184,7 +190,6 @@ test("streaming scroll follows only users who remain near the thread end", () =>
   assert.match(workspace, /behavior: streaming \? "auto" : "smooth"/);
   assert.match(workspace, /onScroll=\{handleThreadScroll\}/);
   assert.match(workspace, /userNearBottomRef\.current = true/);
-  assert.match(workspace, /window\.visualViewport/);
 });
 
 function read(path) {
