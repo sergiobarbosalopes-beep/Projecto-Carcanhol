@@ -591,11 +591,16 @@ export function ChatWorkspace({ initial }: { initial: ChatBootstrap }) {
             </label>
             <div className="text-xs font-bold text-slate-600">
               Contexto por conversa
-              <div className="mt-1 flex min-h-11 rounded-lg border border-slate-300 p-1">
+              <div
+                className="mt-1 flex min-h-11 rounded-lg border border-slate-300 p-1"
+                role="group"
+                aria-label="Categoria de contexto"
+              >
                 {(["skills", "tools", "agents"] as const).map((item) => (
                   <button
                     key={item}
                     type="button"
+                    aria-pressed={section === item}
                     onClick={() => setSection(item)}
                     className={`flex-1 rounded-md px-2 text-sm ${
                       section === item
@@ -787,11 +792,16 @@ function SelectorPanel({
   return (
     <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex rounded-lg border border-slate-300 bg-white p-1">
+        <div
+          className="flex rounded-lg border border-slate-300 bg-white p-1"
+          role="group"
+          aria-label="Modo de seleção de Skills"
+        >
           {(["automatic", "manual"] as const).map((mode) => (
             <button
               key={mode}
               type="button"
+              aria-pressed={conversation?.skill_mode === mode}
               disabled={!conversation || disabled}
               onClick={() => onModeChange(mode)}
               className={`min-h-9 rounded-md px-3 text-xs font-bold ${
