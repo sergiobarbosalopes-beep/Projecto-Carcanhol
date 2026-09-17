@@ -128,6 +128,65 @@ test("Tools and Agents have no execution path and assistant output is plain text
   assert.match(workspace, /whitespace-pre-wrap/);
 });
 
+test("chat composer keeps context compact, sticky and readable while streaming", () => {
+  assert.match(workspace, /data-testid="chat-composer"/);
+  assert.match(workspace, /className="sticky bottom-0/);
+  assert.match(workspace, /safe-area-inset-bottom/);
+  assert.match(workspace, /data-testid="composer-toolbar"/);
+  assert.match(workspace, /Skills: Automático/);
+  assert.match(workspace, /Tools: Automático/);
+  assert.match(workspace, /Agente: Automático/);
+  assert.match(workspace, /Apenas leitura enquanto a resposta está em curso/);
+  assert.match(workspace, /disabled=\{streaming\}/);
+  assert.doesNotMatch(workspace, /Contexto por conversa/);
+});
+
+test("composer selectors expose accessible popovers and mobile sheets", () => {
+  assert.match(workspace, /aria-expanded=\{openPanel === item\.panel\}/);
+  assert.match(workspace, /aria-controls=\{panelDialogId\(item\.panel\)\}/);
+  assert.match(workspace, /role="dialog"/);
+  assert.match(workspace, /aria-modal="true"/);
+  assert.match(workspace, /event\.key === "Escape"/);
+  assert.match(workspace, /event\.key !== "Tab"/);
+  assert.match(workspace, /trigger\?\.focus\(\)/);
+  assert.match(workspace, /onClick=\{onClose\}/);
+  assert.match(
+    workspace,
+    /data-responsive-variant="popover-desktop sheet-mobile"/
+  );
+  assert.match(workspace, /md:bottom-\[var\(--composer-panel-bottom\)\]/);
+});
+
+test("Skill controls and draft state stay owned by the chat workspace", () => {
+  assert.match(
+    workspace,
+    /const \[composer, setComposer\] = useState\(""\)[\s\S]+<ComposerPanelOverlay/
+  );
+  assert.match(workspace, /\(\["automatic", "manual"\] as const\)\.map/);
+  assert.match(
+    workspace,
+    /aria-pressed=\{conversation\?\.skill_mode === mode\}/
+  );
+  assert.match(workspace, /onToggleSuggested\(skill\.id\)/);
+  assert.match(workspace, /onToggleSkill\(skill\.id\)/);
+  assert.match(workspace, /placeholder="Pesquisar Skills"/);
+  assert.match(workspace, /data-testid=\{`\$\{section\}-empty-state`\}/);
+});
+
+test("streaming scroll follows only users who remain near the thread end", () => {
+  assert.match(workspace, /userNearBottomRef/);
+  assert.match(
+    workspace,
+    /thread\.scrollHeight - thread\.scrollTop - thread\.clientHeight < 120/
+  );
+  assert.match(workspace, /if \(userNearBottomRef\.current\)/);
+  assert.match(workspace, /threadRef\.current\?\.scrollTo/);
+  assert.match(workspace, /behavior: streaming \? "auto" : "smooth"/);
+  assert.match(workspace, /onScroll=\{handleThreadScroll\}/);
+  assert.match(workspace, /userNearBottomRef\.current = true/);
+  assert.match(workspace, /window\.visualViewport/);
+});
+
 function read(path) {
   return readFileSync(new URL(path, import.meta.url), "utf8");
 }
