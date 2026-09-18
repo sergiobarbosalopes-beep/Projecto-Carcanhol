@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
@@ -8,6 +9,7 @@ import {
   denyAllPermissions,
   inferWithSession,
   listModelsWithSession,
+  streamWithSession,
 } from "../dist/copilot-adapter.js";
 import {
   assertWorkerEnvironmentIsolated,
@@ -211,7 +213,7 @@ test("pins the SDK and configures empty mode without logged-in fallback", () => 
   );
 });
 
-test("builds inference sessions with every execution capability disabled", () => {
+test("keeps non-chat inference isolated and enables web_fetch only explicitly", () => {
   const token = `github_pat_${"D".repeat(40)}`;
   const sessionId = "54ec5d09-71ca-4f63-b46b-a85bbcfe03d3";
   const config = createInferenceSessionConfig(
@@ -248,6 +250,263 @@ test("builds inference sessions with every execution capability disabled", () =>
     ).streaming,
     true
   );
+
+  const webConfig = createInferenceSessionConfig(
+    token,
+    sessionId,
+    "claude-haiku-4.5",
+    undefined,
+    true,
+    true
+  );
+  assert.deepEqual(webConfig.availableTools, ["builtin:web_fetch"]);
+  assert.deepEqual(webConfig.excludedTools, ["mcp:*", "custom:*"]);
+});
+
+test("streams only sanitized web_fetch activity and citation sources", async () => {
+  const listeners = new Map();
+  const events = [];
+  const sessionId = "7fcb70d6-f6c4-42f2-9328-8ee00db7070b";
+  const session = {
+    rpc: {
+      usage: {
+        async getMetrics() {
+          return { lastCallInputTokens: 12, lastCallOutputTokens: 8 };
+        },
+      },
+    },
+    on(type, listener) {
+      listeners.set(type, listener);
+      return () => listeners.delete(type);
+    },
+    async sendAndWait() {
+      listeners.get("tool.execution_start")({
+        data: {
+          toolCallId: "tool-1",
+          toolName: "web_fetch",
+          arguments: {
+            url: "https://example.com/current?secret=query#fragment",
+            body: "must-not-leak",
+          },
+        },
+      });
+      listeners.get("tool.execution_complete")({
+        data: {
+          toolCallId: "tool-1",
+          success: true,
+          result: {
+            content: "raw page body must not cross the worker boundary",
+            citableSources: [
+              {
+                id: "source-1",
+                title: "Example source",
+                url: "https://example.com/current?secret=query#fragment",
+                content: "raw source must not cross the worker boundary",
+              },
+              {
+                id: "source-2",
+                title: "Blocked source",
+                url: "http://127.0.0.1/private",
+                content: "private",
+              },
+            ],
+          },
+        },
+      });
+      listeners.get("assistant.message")({
+        data: {
+          content: "Fact supported by the source.",
+          citations: {
+            sources: [
+              {
+                id: "source-1",
+                title: "Example source",
+                url: "https://example.com/current?secret=query#fragment",
+              },
+            ],
+            spans: [],
+          },
+        },
+      });
+      return { data: { content: "Fact supported by the source." } };
+    },
+    async abort() {},
+    async disconnect() {},
+  };
+  const client = {
+    async createSession() {
+      return session;
+    },
+    async deleteSession() {},
+  };
+
+  await streamWithSession(
+    client,
+    `github_pat_${"W".repeat(40)}`,
+    sessionId,
+    "claude-haiku-4.5",
+    "Read https://example.com/current",
+    1_000,
+    new AbortController().signal,
+    async (event) => events.push(event),
+    Date.now()
+  );
+
+  assert.deepEqual(events, [
+    { v: 1, type: "start", requestId: sessionId },
+    {
+      v: 1,
+      type: "tool",
+      requestId: sessionId,
+      tool: "web_fetch",
+      status: "started",
+      source: { url: "https://example.com/current" },
+    },
+    {
+      v: 1,
+      type: "tool",
+      requestId: sessionId,
+      tool: "web_fetch",
+      status: "completed",
+      source: {
+        url: "https://example.com/current",
+        title: "Example source",
+      },
+    },
+    {
+      v: 1,
+      type: "sources",
+      requestId: sessionId,
+      sources: [
+        {
+          url: "https://example.com/current",
+          title: "Example source",
+        },
+      ],
+    },
+    {
+      v: 1,
+      type: "sources",
+      requestId: sessionId,
+      sources: [
+        {
+          url: "https://example.com/current",
+          title: "Example source",
+        },
+      ],
+    },
+    {
+      v: 1,
+      type: "done",
+      requestId: sessionId,
+      text: "Fact supported by the source.",
+      usage: { inputTokens: 12, outputTokens: 8 },
+      durationMs: events.at(-1)?.durationMs ?? 0,
+    },
+  ]);
+  assert.equal(JSON.stringify(events).includes("secret=query"), false);
+  assert.equal(JSON.stringify(events).includes("raw page body"), false);
+});
+
+test("aborts oversized or binary web_fetch results before a final answer", async () => {
+  for (const result of [
+    { content: "x".repeat(1_000_001) },
+    {
+      content: "bounded",
+      contents: [{ type: "image", mimeType: "image/png", data: "AAAA" }],
+    },
+    {
+      content: "bounded",
+      contents: [
+        {
+          type: "resource",
+          resource: {
+            uri: "https://example.com/file.pdf",
+            mimeType: "application/pdf",
+            text: "PDF",
+          },
+        },
+      ],
+    },
+  ]) {
+    const listeners = new Map();
+    const events = [];
+    let aborts = 0;
+    const sessionId = randomUUID();
+    const session = {
+      rpc: { usage: { async getMetrics() {} } },
+      on(type, listener) {
+        listeners.set(type, listener);
+        return () => listeners.delete(type);
+      },
+      async sendAndWait() {
+        listeners.get("tool.execution_start")({
+          data: {
+            toolCallId: "unsafe-tool",
+            toolName: "web_fetch",
+            arguments: { url: "https://example.com" },
+          },
+        });
+        listeners.get("tool.execution_complete")({
+          data: {
+            toolCallId: "unsafe-tool",
+            success: true,
+            result,
+          },
+        });
+        listeners.get("assistant.message")({
+          data: {
+            content: "Must not become a final answer.",
+            citations: {
+              sources: [
+                {
+                  id: "unsafe-source",
+                  title: "Unsafe source",
+                  url: "https://example.com/unsafe?secret=value",
+                },
+              ],
+              spans: [],
+            },
+          },
+        });
+        return { data: { content: "Must not become a final answer." } };
+      },
+      async abort() {
+        aborts += 1;
+      },
+      async disconnect() {},
+    };
+
+    await streamWithSession(
+      {
+        async createSession() {
+          return session;
+        },
+        async deleteSession() {},
+      },
+      `github_pat_${"X".repeat(40)}`,
+      sessionId,
+      "claude-haiku-4.5",
+      "unsafe",
+      1_000,
+      new AbortController().signal,
+      async (event) => events.push(event),
+      Date.now()
+    );
+
+    assert.equal(aborts > 0, true);
+    assert.equal(
+      events.some((event) => event.type === "done"),
+      false
+    );
+    assert.equal(
+      events.some((event) => event.type === "sources"),
+      false
+    );
+    assert.equal(JSON.stringify(events).includes("secret=value"), false);
+    assert.equal(events.at(-1)?.type, "error");
+    assert.equal(events.at(-1)?.code, "invalid_response");
+  }
 });
 
 test("runs one inference and always disconnects and deletes the session", async () => {

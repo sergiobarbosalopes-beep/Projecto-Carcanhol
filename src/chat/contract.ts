@@ -71,6 +71,45 @@ export const skillSuggestionOutputSchema = z
   })
   .strict();
 
+export const chatWebSourceSchema = z
+  .object({
+    url: z
+      .string()
+      .url()
+      .max(2_048)
+      .refine((value) => {
+        const url = new URL(value);
+        return (
+          url.protocol === "https:" &&
+          !url.username &&
+          !url.password &&
+          !url.search &&
+          !url.hash &&
+          (!url.port || url.port === "443")
+        );
+      }),
+    title: z.string().min(1).max(200).optional(),
+  })
+  .strict();
+
+export type ChatWebSource = z.infer<typeof chatWebSourceSchema>;
+
+export function mergeChatWebSources(
+  current: readonly ChatWebSource[],
+  incoming: readonly ChatWebSource[]
+) {
+  const sources = new Map(current.map((source) => [source.url, source]));
+
+  for (const source of incoming) {
+    if (sources.size === 16 && !sources.has(source.url)) {
+      continue;
+    }
+    sources.set(source.url, source);
+  }
+
+  return [...sources.values()];
+}
+
 export const publicChatStreamEventSchema = z.discriminatedUnion("type", [
   z
     .object({
@@ -89,6 +128,24 @@ export const publicChatStreamEventSchema = z.discriminatedUnion("type", [
       assistantMessageId: uuidSchema,
       sequence: z.number().int().positive(),
       text: z.string().min(1).max(16_000),
+    })
+    .strict(),
+  z
+    .object({
+      v: z.literal(CHAT_STREAM_PROTOCOL_VERSION),
+      type: z.literal("tool"),
+      assistantMessageId: uuidSchema,
+      tool: z.literal("web_fetch"),
+      status: z.enum(["started", "completed"]),
+      source: chatWebSourceSchema.optional(),
+    })
+    .strict(),
+  z
+    .object({
+      v: z.literal(CHAT_STREAM_PROTOCOL_VERSION),
+      type: z.literal("sources"),
+      assistantMessageId: uuidSchema,
+      sources: z.array(chatWebSourceSchema).min(1).max(16),
     })
     .strict(),
   z

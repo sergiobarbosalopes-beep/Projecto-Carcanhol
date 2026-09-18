@@ -5,6 +5,8 @@ import {
 import { AuthorizationError, requireAuthorizedUser } from "@/src/auth/server";
 import {
   chatTurnSchema,
+  mergeChatWebSources,
+  type ChatWebSource,
   type PublicChatStreamEvent,
 } from "@/src/chat/contract";
 import {
@@ -127,6 +129,7 @@ export async function POST(request: Request) {
         };
         let content = "";
         let terminalPersisted = false;
+        let webSources: ChatWebSource[] = [];
 
         send({
           v: 1,
@@ -165,6 +168,23 @@ export async function POST(request: Request) {
 
               if (event.type === "heartbeat") {
                 send({ v: 1, type: "heartbeat" });
+              } else if (event.type === "tool") {
+                send({
+                  v: 1,
+                  type: "tool",
+                  assistantMessageId: turn.assistant_message_id,
+                  tool: event.tool,
+                  status: event.status,
+                  ...(event.source ? { source: event.source } : {}),
+                });
+              } else if (event.type === "sources") {
+                webSources = mergeChatWebSources(webSources, event.sources);
+                send({
+                  v: 1,
+                  type: "sources",
+                  assistantMessageId: turn.assistant_message_id,
+                  sources: webSources,
+                });
               } else if (event.type === "delta") {
                 if (event.sequence !== expectedSequence) {
                   throw new Error("Out-of-order worker stream.");
@@ -182,14 +202,17 @@ export async function POST(request: Request) {
                 if (terminalPersisted)
                   throw new Error("Duplicate terminal event.");
                 content = event.text;
-                const usage = event.usage as Json | undefined;
+                const usage = {
+                  ...(event.usage ?? {}),
+                  ...(webSources.length > 0 ? { webSources } : {}),
+                } as Json;
                 await finalizeAssistantMessage(
                   client,
                   user.id,
                   turn.assistant_message_id,
                   "complete",
                   content,
-                  { ...(usage ? { usage } : {}) }
+                  { usage }
                 );
                 terminalPersisted = true;
                 send({

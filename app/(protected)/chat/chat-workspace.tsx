@@ -20,6 +20,7 @@ import type {
   ChatConversation,
   ChatMessage,
   ChatSkillMode,
+  Json,
 } from "@/src/types/supabase";
 
 type Suggestion = { id: string; reason: string };
@@ -411,6 +412,36 @@ export function ChatWorkspace({ initial }: { initial: ChatBootstrap }) {
             )
           );
         },
+        onTool(event) {
+          setMessages((current) =>
+            current.map((message) =>
+              message.id === event.assistantMessageId ||
+              message.id === optimisticAssistantId
+                ? {
+                    ...message,
+                    usage: mergeMessageUsage(message.usage, {
+                      webReading: event.status === "started",
+                    }),
+                  }
+                : message
+            )
+          );
+        },
+        onSources(event) {
+          setMessages((current) =>
+            current.map((message) =>
+              message.id === event.assistantMessageId ||
+              message.id === optimisticAssistantId
+                ? {
+                    ...message,
+                    usage: mergeMessageUsage(message.usage, {
+                      webSources: event.sources,
+                    }),
+                  }
+                : message
+            )
+          );
+        },
         onDone(event) {
           setMessages((current) =>
             current.map((message) =>
@@ -421,7 +452,10 @@ export function ChatWorkspace({ initial }: { initial: ChatBootstrap }) {
                     id: event.assistantMessageId,
                     content: event.content,
                     status: "complete",
-                    usage: event.usage ?? null,
+                    usage: mergeMessageUsage(message.usage, {
+                      ...(event.usage ?? {}),
+                      webReading: false,
+                    }),
                     completed_at: new Date().toISOString(),
                   }
                 : message
@@ -567,8 +601,8 @@ export function ChatWorkspace({ initial }: { initial: ChatBootstrap }) {
         <header className="border-b border-slate-200 p-4">
           <h1 className="text-lg font-bold text-slate-950">Chat</h1>
           <p className="text-sm text-slate-500">
-            Conversas de texto persistentes. Sem Tools, agentes ou dados
-            financeiros nesta fase.
+            Conversas persistentes com leitura automática de páginas HTTPS. Sem
+            pesquisa web, outras Tools, agentes ou dados financeiros.
           </p>
         </header>
 
@@ -1289,7 +1323,30 @@ function MessageBubble({
     >
       <p className="whitespace-pre-wrap text-sm leading-6">{message.content}</p>
       {assistant && message.status === "streaming" && (
-        <p className="mt-2 text-xs font-semibold text-teal-700">A responder…</p>
+        <p className="mt-2 text-xs font-semibold text-teal-700">
+          {isWebReading(message.usage) ? "A ler fonte web…" : "A responder…"}
+        </p>
+      )}
+      {assistant && webSourcesFromUsage(message.usage).length > 0 && (
+        <div className="mt-3 border-t border-slate-100 pt-2">
+          <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">
+            Fontes web
+          </p>
+          <ul className="mt-1 space-y-1">
+            {webSourcesFromUsage(message.usage).map((source) => (
+              <li key={source.url}>
+                <a
+                  href={source.url}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="break-all text-xs font-semibold text-teal-800 underline"
+                >
+                  {source.title ?? source.url}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
       {assistant &&
         (message.status === "cancelled" || message.status === "failed") && (
@@ -1327,6 +1384,10 @@ async function consumeChatStream(
   handlers: {
     onStart: (event: Extract<PublicChatStreamEvent, { type: "start" }>) => void;
     onDelta: (event: Extract<PublicChatStreamEvent, { type: "delta" }>) => void;
+    onTool: (event: Extract<PublicChatStreamEvent, { type: "tool" }>) => void;
+    onSources: (
+      event: Extract<PublicChatStreamEvent, { type: "sources" }>
+    ) => void;
     onDone: (event: Extract<PublicChatStreamEvent, { type: "done" }>) => void;
     onError: (event: Extract<PublicChatStreamEvent, { type: "error" }>) => void;
   }
@@ -1349,11 +1410,14 @@ async function consumeChatStream(
       if (event.v !== 1) throw new Error("Versão de stream inválida.");
       if (event.type === "start") handlers.onStart(event);
       if (event.type === "delta") handlers.onDelta(event);
+      if (event.type === "tool") handlers.onTool(event);
+      if (event.type === "sources") handlers.onSources(event);
       if (event.type === "done") {
         if (terminal) throw new Error("Resposta terminal duplicada.");
         terminal = true;
         handlers.onDone(event);
       }
+
       if (event.type === "error") {
         if (terminal) throw new Error("Resposta terminal duplicada.");
         terminal = true;
@@ -1363,6 +1427,58 @@ async function consumeChatStream(
   }
 
   if (!terminal) throw new Error("A resposta terminou inesperadamente.");
+}
+
+function mergeMessageUsage(
+  usage: Json | null,
+  update: Record<string, Json | undefined>
+): Json {
+  const current =
+    usage && typeof usage === "object" && !Array.isArray(usage) ? usage : {};
+  return Object.fromEntries(
+    Object.entries({ ...current, ...update }).filter(
+      ([, value]) => value !== undefined
+    )
+  ) as Json;
+}
+
+function isWebReading(usage: Json | null) {
+  return (
+    usage !== null &&
+    typeof usage === "object" &&
+    !Array.isArray(usage) &&
+    usage.webReading === true
+  );
+}
+
+function webSourcesFromUsage(usage: Json | null) {
+  if (
+    usage === null ||
+    typeof usage !== "object" ||
+    Array.isArray(usage) ||
+    !Array.isArray(usage.webSources)
+  ) {
+    return [];
+  }
+
+  return usage.webSources.flatMap((source) => {
+    if (
+      source === null ||
+      typeof source !== "object" ||
+      Array.isArray(source) ||
+      typeof source.url !== "string" ||
+      (source.title !== undefined && typeof source.title !== "string")
+    ) {
+      return [];
+    }
+
+    return [
+      {
+        url: source.url,
+        ...(source.title ? { title: source.title } : {}),
+      },
+    ];
+  });
 }
 
 function optimisticMessage({
