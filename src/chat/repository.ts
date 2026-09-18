@@ -242,6 +242,8 @@ export async function prepareChatTurn(
     throw new ChatNotFoundError();
   }
 
+  await recoverStaleAssistantStream(client, userId, input.conversationId);
+
   const skillAudit = skills.map((skill) => ({
     id: skill.id,
     name: skill.name,
@@ -297,6 +299,33 @@ export async function prepareChatTurn(
     prompt,
     systemPrompt: buildSkillSystemPrompt(skills),
   };
+}
+
+async function recoverStaleAssistantStream(
+  client: CarcanholClient,
+  userId: string,
+  conversationId: string
+) {
+  const staleBefore = new Date(Date.now() - 2 * 60_000).toISOString();
+  const { data, error } = await client
+    .from("chat_messages")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("conversation_id", conversationId)
+    .eq("role", "assistant")
+    .eq("status", "streaming")
+    .lt("created_at", staleBefore)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error("Não foi possível verificar a resposta anterior.");
+  }
+
+  if (data) {
+    await finalizeAssistantMessage(client, userId, data.id, "failed", "", {
+      errorCode: "stream_interrupted",
+    });
+  }
 }
 
 export async function finalizeAssistantMessage(

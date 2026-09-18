@@ -15,7 +15,7 @@ import type {
   ChatModelOption,
   ChatSkillOption,
 } from "@/src/chat/repository";
-import type { PublicChatStreamEvent } from "@/src/chat/contract";
+import { consumeChatStream } from "@/src/chat/stream";
 import type {
   ChatConversation,
   ChatMessage,
@@ -1377,56 +1377,6 @@ function MessageBubble({
       )}
     </article>
   );
-}
-
-async function consumeChatStream(
-  stream: ReadableStream<Uint8Array>,
-  handlers: {
-    onStart: (event: Extract<PublicChatStreamEvent, { type: "start" }>) => void;
-    onDelta: (event: Extract<PublicChatStreamEvent, { type: "delta" }>) => void;
-    onTool: (event: Extract<PublicChatStreamEvent, { type: "tool" }>) => void;
-    onSources: (
-      event: Extract<PublicChatStreamEvent, { type: "sources" }>
-    ) => void;
-    onDone: (event: Extract<PublicChatStreamEvent, { type: "done" }>) => void;
-    onError: (event: Extract<PublicChatStreamEvent, { type: "error" }>) => void;
-  }
-) {
-  const reader = stream.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let terminal = false;
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
-
-    for (const line of lines) {
-      if (!line) continue;
-      const event = JSON.parse(line) as PublicChatStreamEvent;
-      if (event.v !== 1) throw new Error("Versão de stream inválida.");
-      if (event.type === "start") handlers.onStart(event);
-      if (event.type === "delta") handlers.onDelta(event);
-      if (event.type === "tool") handlers.onTool(event);
-      if (event.type === "sources") handlers.onSources(event);
-      if (event.type === "done") {
-        if (terminal) throw new Error("Resposta terminal duplicada.");
-        terminal = true;
-        handlers.onDone(event);
-      }
-
-      if (event.type === "error") {
-        if (terminal) throw new Error("Resposta terminal duplicada.");
-        terminal = true;
-        handlers.onError(event);
-      }
-    }
-  }
-
-  if (!terminal) throw new Error("A resposta terminou inesperadamente.");
 }
 
 function mergeMessageUsage(

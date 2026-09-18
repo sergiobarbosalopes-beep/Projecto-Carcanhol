@@ -6,6 +6,8 @@ const migration = read("../database/migrations/0009_chat_base.sql");
 const repository = read("../src/chat/repository.ts");
 const contract = read("../src/chat/contract.ts");
 const streamRoute = read("../app/api/chat/messages/stream/route.ts");
+const streamRelay = read("../src/chat/worker-stream-relay.ts");
+const streamConsumer = read("../src/chat/stream.ts");
 const suggestionRoute = read("../app/api/chat/suggestions/route.ts");
 const workspace = read("../app/(protected)/chat/chat-workspace.tsx");
 const workerContract = read("../services/copilot-worker/src/contract.ts");
@@ -100,9 +102,11 @@ test("streaming uses official SDK deltas with allowlisted bounded NDJSON", () =>
     /copilotStreamEventSchema = z\.discriminatedUnion/
   );
   assert.match(workerContract, /COPILOT_STREAM_MAX_DELTA_LENGTH = 16_000/);
-  assert.match(streamRoute, /expectedSequence/);
-  assert.match(streamRoute, /Duplicate terminal event/);
+  assert.match(streamRelay, /expectedSequence/);
+  assert.match(streamRelay, /Duplicate terminal event/);
   assert.match(streamRoute, /COPILOT_WORKER_MAX_RESPONSE_BYTES/);
+  assert.match(streamConsumer, /publicChatStreamEventSchema\.parse/);
+  assert.match(streamConsumer, /if \(!terminal\)/);
 });
 
 test("cancelled and failed responses remain visibly terminal and retry is idempotent", () => {
@@ -112,7 +116,11 @@ test("cancelled and failed responses remain visibly terminal and retry is idempo
     /create or replace function carcanhol\.retry_chat_turn/
   );
   assert.match(migration, /client_request_id = p_client_request_id/);
-  assert.match(streamRoute, /streamAbort\.signal\.aborted/);
+  assert.match(repository, /recoverStaleAssistantStream/);
+  assert.match(repository, /\.lt\("created_at", staleBefore\)/);
+  assert.match(repository, /errorCode: "stream_interrupted"/);
+  assert.match(streamRelay, /signal\.aborted/);
+  assert.match(streamRoute, /streamAbort\.signal/);
   assert.match(workspace, /Cancelar/);
   assert.match(workspace, /Resposta cancelada/);
   assert.match(workspace, /Tentar novamente/);
@@ -128,7 +136,7 @@ test("only automatic web reading has an execution path and output stays plain te
   assert.match(workerAdapter, /excludedTools: \["mcp:\*", "custom:\*"\]/);
   assert.match(workerAdapter, /"tool\.execution_start"/);
   assert.match(workerAdapter, /"tool\.execution_complete"/);
-  assert.match(streamRoute, /webSources/);
+  assert.match(streamRelay, /webSources/);
   assert.match(workspace, /Fontes web/);
   assert.match(repository, /não tens pesquisa web/);
   assert.doesNotMatch(
