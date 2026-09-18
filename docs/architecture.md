@@ -551,12 +551,12 @@ servidor. O browser nunca envia conteúdo de Skills. O conteúdo confirmado é
 ordenado, delimitado e incorporado como system context textual; não ativa o
 runtime nativo de Skills do Copilot. O modo Automático/Manual aplica-se apenas
 às capacidades criadas no Projecto Carcanhol. Capacidades GitHub Copilot
-disponíveis e compatíveis são geridas automaticamente pelo runtime e aparecem
-na toolbar do composer apenas num resumo informativo, sem checkboxes ou
-controlos de seleção. O textarea surge imediatamente depois do histórico; a
-toolbar compacta fica abaixo e abre a configuração Carcanhol num popover
-ancorado em desktop ou bottom sheet em mobile. Só existe um detalhe aberto,
-com Escape, click exterior, focus trap e retorno do foco ao trigger.
+disponíveis e compatíveis são geridas automaticamente pelo runtime e não têm
+configuração, indicador, checkboxes ou controlos de seleção no composer. O
+textarea surge imediatamente depois do histórico; a toolbar compacta fica
+abaixo e abre a configuração Carcanhol num popover ancorado em desktop ou
+bottom sheet em mobile. Só existe um detalhe aberto, com Escape, click
+exterior, focus trap e retorno do foco ao trigger.
 
 `POST /api/admin/skills/generate` valida uma descrição até 2 000 caracteres,
 aplica rate limit por utilizador e IP e permite apenas uma geração simultânea

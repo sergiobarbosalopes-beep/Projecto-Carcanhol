@@ -794,7 +794,7 @@ function ComposerToolbar({
 
   return (
     <div
-      className="flex min-w-0 items-center gap-2"
+      className="flex min-w-0 items-center gap-1.5"
       role="group"
       aria-label={`Configuração da próxima mensagem${
         streaming ? ". Apenas leitura durante a resposta" : ""
@@ -802,27 +802,10 @@ function ComposerToolbar({
       data-testid="composer-toolbar"
     >
       <div
-        className="-mx-1 flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto px-1 pb-1 [scrollbar-width:thin]"
+        className="-mx-1 flex min-w-0 flex-1 items-center gap-1 overflow-x-auto px-1 pb-1 [scrollbar-width:thin]"
         data-testid="composer-toolbar-controls"
       >
-        {items.slice(0, 1).map((item) => (
-          <ToolbarButton
-            key={item.panel}
-            item={item}
-            open={openPanel === item.panel}
-            onOpen={onOpenPanel}
-          />
-        ))}
-        <span
-          className="flex min-h-11 max-w-[13rem] shrink-0 items-center rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-xs font-semibold text-slate-600"
-          role="status"
-          aria-label="Capacidades GitHub Copilot: automáticas. O runtime gere apenas capacidades disponíveis e compatíveis; este indicador não ativa capacidades."
-          title="O runtime gere automaticamente apenas capacidades GitHub Copilot disponíveis e compatíveis. Sem seleção manual."
-          data-testid="copilot-capabilities-summary"
-        >
-          <span className="truncate">GitHub Copilot automático</span>
-        </span>
-        {items.slice(1).map((item) => (
+        {items.map((item) => (
           <ToolbarButton
             key={item.panel}
             item={item}
@@ -881,7 +864,7 @@ function ToolbarButton({
       aria-expanded={open}
       aria-controls={panelDialogId(item.panel)}
       onClick={() => onOpen(item.panel)}
-      className={`flex min-h-11 max-w-[13rem] shrink-0 items-center rounded-lg border px-2.5 text-xs font-bold outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-teal-700 focus-visible:ring-offset-2 motion-reduce:transition-none ${
+      className={`flex min-h-11 max-w-[13rem] shrink-0 items-center rounded-lg border px-2 text-xs font-bold outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-teal-700 focus-visible:ring-offset-2 motion-reduce:transition-none ${
         open
           ? "border-teal-700 bg-teal-50 text-teal-900"
           : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50"

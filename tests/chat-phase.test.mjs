@@ -202,17 +202,14 @@ test("Skill controls and draft state stay owned by the chat workspace", () => {
   assert.match(workspace, /setOpenPanel\(\(current\)/);
 });
 
-test("Copilot capabilities are automatic and read-only while selectors are Carcanhol-only", () => {
-  assert.match(workspace, /GitHub Copilot automático/);
-  assert.match(
-    workspace,
-    /O runtime gere apenas capacidades disponíveis e compatíveis/
-  );
+test("toolbar exposes only Carcanhol capability selectors", () => {
   assert.match(workspace, /Skills do Carcanhol/);
   assert.match(workspace, /Tools do Carcanhol/);
   assert.match(workspace, /Agentes do Carcanhol/);
   assert.match(workspace, /Modo de seleção de Skills do Carcanhol/);
   assert.doesNotMatch(workspace, /panel: "copilot"/);
+  assert.doesNotMatch(workspace, /copilot-capabilities-summary/);
+  assert.doesNotMatch(workspace, /GitHub Copilot automático/);
   assert.doesNotMatch(workspace, /Skills GitHub Copilot|Tools GitHub Copilot/);
 });
 

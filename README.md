@@ -60,9 +60,8 @@ triggers globais em `auth.users` e não concedem membership automaticamente.
   por resposta com ID, nome, `updated_at` usado como versão e SHA-256 do
   conteúdo; Tools/Agentes do Carcanhol usam o mesmo detalhe, mas permanecem
   estados vazios não executáveis;
-- resumo read-only das capacidades GitHub Copilot: o runtime gere
-  automaticamente apenas as que estejam disponíveis e sejam compatíveis, sem
-  expor internals, permissões ou seleção manual;
+- capacidades GitHub Copilot geridas automaticamente e apenas a nível interno,
+  sem configuração, indicador ou seleção manual no composer;
 - credenciais LLM cifradas no backend com AES-256-GCM e persistidas numa tabela
   separada, acessível apenas à service role.
 
