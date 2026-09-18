@@ -221,7 +221,6 @@ async function withDnsDeadline<T>(promise: Promise<T>, timeoutMs: number) {
           () => reject(new Error("DNS resolution timed out.")),
           timeoutMs
         );
-        timeout.unref?.();
       }),
     ]);
   } finally {
