@@ -1,6 +1,15 @@
 "use client";
 
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type FormEvent,
+} from "react";
+import { createPortal } from "react-dom";
 import type {
   ChatBootstrap,
   ChatModelOption,
@@ -15,6 +24,7 @@ import type {
 
 type Suggestion = { id: string; reason: string };
 type SelectorSection = "skills" | "tools" | "agents";
+type ComposerPanel = SelectorSection | "model";
 
 export function ChatWorkspace({ initial }: { initial: ChatBootstrap }) {
   const [conversations, setConversations] = useState(initial.conversations);
@@ -23,7 +33,7 @@ export function ChatWorkspace({ initial }: { initial: ChatBootstrap }) {
   const [models] = useState(initial.models);
   const [skills] = useState(initial.skills);
   const [composer, setComposer] = useState("");
-  const [section, setSection] = useState<SelectorSection>("skills");
+  const [openPanel, setOpenPanel] = useState<ComposerPanel | null>(null);
   const [suggestions, setSuggestions] = useState<Suggestion[] | null>(null);
   const [suggestedIds, setSuggestedIds] = useState<string[]>([]);
   const [suggesting, setSuggesting] = useState(false);
@@ -34,7 +44,8 @@ export function ChatWorkspace({ initial }: { initial: ChatBootstrap }) {
   const [renameValue, setRenameValue] = useState("");
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
-  const threadEndRef = useRef<HTMLDivElement>(null);
+  const threadRef = useRef<HTMLDivElement>(null);
+  const userNearBottomRef = useRef(true);
   const selected = conversations.find((item) => item.id === selectedId) ?? null;
   const selectedModel =
     models.find((model) => model.id === selected?.current_account_model_id) ??
@@ -43,8 +54,27 @@ export function ChatWorkspace({ initial }: { initial: ChatBootstrap }) {
     null;
 
   useEffect(() => {
-    threadEndRef.current?.scrollIntoView({ block: "end" });
-  }, [messages]);
+    if (userNearBottomRef.current) {
+      threadRef.current?.scrollTo({
+        top: threadRef.current.scrollHeight,
+        behavior: streaming ? "auto" : "smooth",
+      });
+    }
+  }, [messages, streaming]);
+
+  useLayoutEffect(() => {
+    userNearBottomRef.current = true;
+    const thread = threadRef.current;
+    if (thread) thread.scrollTop = thread.scrollHeight;
+  }, [selectedId]);
+
+  const handleThreadScroll = useCallback(() => {
+    const thread = threadRef.current;
+    if (!thread) return;
+    userNearBottomRef.current =
+      thread.scrollHeight - thread.scrollTop - thread.clientHeight < 120;
+  }, []);
+  const closeComposerPanel = useCallback(() => setOpenPanel(null), []);
 
   async function refreshConversation(conversationId: string) {
     if (streaming || conversationId === selectedId) return;
@@ -67,6 +97,7 @@ export function ChatWorkspace({ initial }: { initial: ChatBootstrap }) {
     setMessages(result.data.messages);
     setSuggestions(null);
     setSuggestedIds([]);
+    setOpenPanel(null);
     window.history.replaceState(
       null,
       "",
@@ -94,6 +125,7 @@ export function ChatWorkspace({ initial }: { initial: ChatBootstrap }) {
     setSelectedId(result.data.id);
     setMessages([]);
     setComposer("");
+    setOpenPanel(null);
     setSuggestions(null);
     setSuggestedIds([]);
     window.history.replaceState(
@@ -255,7 +287,9 @@ export function ChatWorkspace({ initial }: { initial: ChatBootstrap }) {
     let serverStarted = false;
     let serverAssistantId: string | null = null;
     abortRef.current = controller;
+    userNearBottomRef.current = true;
     setStreaming(true);
+    setOpenPanel(null);
     setFeedback("");
     setSuggestions(null);
     setSuggestedIds([]);
@@ -529,7 +563,7 @@ export function ChatWorkspace({ initial }: { initial: ChatBootstrap }) {
         </div>
       </aside>
 
-      <section className="flex min-h-[44rem] min-w-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <section className="flex h-[calc(100dvh-6.5rem)] min-h-[32rem] min-w-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm lg:h-[calc(100dvh-8rem)] lg:min-h-[44rem]">
         <header className="border-b border-slate-200 p-4">
           <h1 className="text-lg font-bold text-slate-950">Chat</h1>
           <p className="text-sm text-slate-500">
@@ -539,9 +573,12 @@ export function ChatWorkspace({ initial }: { initial: ChatBootstrap }) {
         </header>
 
         <div
-          className="min-h-0 flex-1 space-y-4 overflow-y-auto bg-slate-50 p-4 sm:p-6"
+          ref={threadRef}
+          onScroll={handleThreadScroll}
+          className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain bg-slate-50 p-4 pb-8 sm:p-6 sm:pb-10"
           aria-live="polite"
           aria-busy={streaming || loadingConversation}
+          data-testid="chat-thread"
         >
           {loadingConversation ? (
             <p className="text-sm text-slate-500">A carregar conversa…</p>
@@ -565,90 +602,23 @@ export function ChatWorkspace({ initial }: { initial: ChatBootstrap }) {
               />
             ))
           )}
-          <div ref={threadEndRef} />
         </div>
 
-        <div className="border-t border-slate-200 bg-white p-4">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="text-xs font-bold text-slate-600">
-              Conta e modelo
-              <select
-                value={selectedModel?.id ?? ""}
-                disabled={!selected || streaming || models.length === 0}
-                onChange={(event) => changeModel(event.target.value)}
-                className="mt-1 min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm"
-              >
-                {models.length === 0 && (
-                  <option value="">Sem predefinição LLM ativa</option>
-                )}
-                {models.map((model) => (
-                  <option key={model.id} value={model.id}>
-                    {providerLabel(model.provider)} · {model.accountName} ·{" "}
-                    {model.modelName}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <div className="text-xs font-bold text-slate-600">
-              Contexto por conversa
-              <div
-                className="mt-1 flex min-h-11 rounded-lg border border-slate-300 p-1"
-                role="group"
-                aria-label="Categoria de contexto"
-              >
-                {(["skills", "tools", "agents"] as const).map((item) => (
-                  <button
-                    key={item}
-                    type="button"
-                    aria-pressed={section === item}
-                    onClick={() => setSection(item)}
-                    className={`flex-1 rounded-md px-2 text-sm ${
-                      section === item
-                        ? "bg-slate-900 text-white"
-                        : "text-slate-600"
-                    }`}
-                  >
-                    {sectionLabel(item)}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          <SelectorPanel
-            section={section}
-            conversation={selected}
-            skills={skills}
-            suggestedIds={suggestedIds}
-            suggestions={suggestions}
-            disabled={streaming}
-            onModeChange={changeSkillMode}
-            onToggleSkill={toggleSkill}
-            onToggleSuggested={(id) =>
-              setSuggestedIds((current) =>
-                current.includes(id)
-                  ? current.filter((item) => item !== id)
-                  : [...current, id]
-              )
-            }
-          />
-
-          {feedback && (
-            <p
-              role="alert"
-              className="mt-3 text-sm font-semibold text-rose-700"
-            >
-              {feedback}
-            </p>
-          )}
-
-          <form onSubmit={handleSend} className="mt-3 flex items-end gap-2">
+        <div
+          className="sticky bottom-0 z-10 border-t border-slate-200 bg-white/95 px-3 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 shadow-[0_-8px_24px_-20px_rgba(15,23,42,0.7)] backdrop-blur sm:px-4"
+          data-testid="chat-composer"
+        >
+          <form
+            onSubmit={handleSend}
+            className="space-y-2"
+            data-testid="chat-composer-form"
+          >
             <label className="sr-only" htmlFor="chat-message">
               Mensagem
             </label>
             <textarea
               id="chat-message"
-              rows={3}
+              rows={2}
               maxLength={4000}
               value={composer}
               disabled={!selected || !selectedModel || streaming}
@@ -664,35 +634,57 @@ export function ChatWorkspace({ initial }: { initial: ChatBootstrap }) {
                 }
               }}
               placeholder="Escreva uma mensagem…"
-              className="min-h-20 min-w-0 flex-1 resize-y rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-teal-600 focus:outline-none"
+              className="min-h-16 max-h-40 w-full resize-y rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-teal-700 focus:ring-2 focus:ring-teal-700/20"
             />
-            {streaming ? (
-              <button
-                type="button"
-                onClick={() => abortRef.current?.abort()}
-                className="min-h-11 rounded-xl bg-rose-700 px-4 text-sm font-bold text-white"
-              >
-                Cancelar
-              </button>
-            ) : (
-              <button
-                type="submit"
-                disabled={
-                  !selected || !selectedModel || !composer.trim() || suggesting
-                }
-                className="min-h-11 rounded-xl bg-teal-700 px-5 text-sm font-bold text-white disabled:opacity-50"
-              >
-                {suggesting
-                  ? "A sugerir…"
-                  : selected?.skill_mode === "automatic" && suggestions === null
-                    ? "Sugerir Skills"
-                    : "Enviar"}
-              </button>
-            )}
+            <ComposerToolbar
+              openPanel={openPanel}
+              selectedModel={selectedModel}
+              conversation={selected}
+              composerLength={composer.length}
+              streaming={streaming}
+              suggesting={suggesting}
+              needsSkillSuggestions={
+                selected?.skill_mode === "automatic" && suggestions === null
+              }
+              canSend={Boolean(selected && selectedModel && composer.trim())}
+              onOpenPanel={(panel) =>
+                setOpenPanel((current) => (current === panel ? null : panel))
+              }
+              onCancel={() => abortRef.current?.abort()}
+            />
           </form>
-          <p className="mt-1 text-right text-xs text-slate-400">
-            {composer.length}/4000 · Enter envia, Shift+Enter cria linha
-          </p>
+          {feedback && (
+            <p
+              role="alert"
+              className="mt-2 text-sm font-semibold text-rose-700"
+            >
+              {feedback}
+            </p>
+          )}
+
+          {openPanel && (
+            <ComposerPanelOverlay
+              panel={openPanel}
+              conversation={selected}
+              selectedModel={selectedModel}
+              models={models}
+              skills={skills}
+              suggestedIds={suggestedIds}
+              suggestions={suggestions}
+              disabled={streaming}
+              onClose={closeComposerPanel}
+              onModelChange={changeModel}
+              onModeChange={changeSkillMode}
+              onToggleSkill={toggleSkill}
+              onToggleSuggested={(id) =>
+                setSuggestedIds((current) =>
+                  current.includes(id)
+                    ? current.filter((item) => item !== id)
+                    : [...current, id]
+                )
+              }
+            />
+          )}
         </div>
       </section>
 
@@ -734,6 +726,373 @@ export function ChatWorkspace({ initial }: { initial: ChatBootstrap }) {
   );
 }
 
+function ComposerToolbar({
+  openPanel,
+  selectedModel,
+  conversation,
+  composerLength,
+  streaming,
+  suggesting,
+  needsSkillSuggestions,
+  canSend,
+  onOpenPanel,
+  onCancel,
+}: {
+  openPanel: ComposerPanel | null;
+  selectedModel: ChatModelOption | null;
+  conversation: ChatConversation | null;
+  composerLength: number;
+  streaming: boolean;
+  suggesting: boolean;
+  needsSkillSuggestions: boolean;
+  canSend: boolean;
+  onOpenPanel: (panel: ComposerPanel) => void;
+  onCancel: () => void;
+}) {
+  const skillSummary =
+    conversation?.skill_mode === "automatic"
+      ? "Skills: Automático"
+      : `Skills: ${conversation?.selected_skill_ids.length ?? 0}`;
+  const items: Array<{
+    panel: ComposerPanel;
+    label: string;
+    fullLabel: string;
+  }> = [
+    {
+      panel: "model",
+      label: selectedModel?.modelName ?? "Sem modelo",
+      fullLabel: selectedModel
+        ? `Conta e modelo: ${providerLabel(selectedModel.provider)}, ${
+            selectedModel.accountName
+          }, ${selectedModel.modelName}${
+            streaming ? ". Apenas leitura durante a resposta" : ""
+          }`
+        : "Conta e modelo: nenhum modelo disponível",
+    },
+    {
+      panel: "skills",
+      label: skillSummary,
+      fullLabel: `${skillSummary} do Carcanhol. Abrir configuração${
+        streaming ? ". Apenas leitura durante a resposta" : ""
+      }`,
+    },
+    {
+      panel: "tools",
+      label: "Tools: Automático · 0",
+      fullLabel: `Tools do Carcanhol: Automático, 0 disponíveis${
+        streaming ? ". Apenas leitura durante a resposta" : ""
+      }`,
+    },
+    {
+      panel: "agents",
+      label: "Agentes: Automático · 0",
+      fullLabel: `Agentes do Carcanhol: Automático, 0 disponíveis${
+        streaming ? ". Apenas leitura durante a resposta" : ""
+      }`,
+    },
+  ];
+
+  return (
+    <div
+      className="flex min-w-0 items-center gap-1.5"
+      role="group"
+      aria-label={`Configuração da próxima mensagem${
+        streaming ? ". Apenas leitura durante a resposta" : ""
+      }`}
+      data-testid="composer-toolbar"
+    >
+      <div
+        className="-mx-1 flex min-w-0 flex-1 items-center gap-1 overflow-x-auto px-1 pb-1 [scrollbar-width:thin]"
+        data-testid="composer-toolbar-controls"
+      >
+        {items.map((item) => (
+          <ToolbarButton
+            key={item.panel}
+            item={item}
+            open={openPanel === item.panel}
+            onOpen={onOpenPanel}
+          />
+        ))}
+      </div>
+      <span
+        className="shrink-0 text-[11px] tabular-nums text-slate-400"
+        aria-label={`${composerLength} de 4000 caracteres`}
+      >
+        {composerLength}/4000
+      </span>
+      {streaming ? (
+        <button
+          type="button"
+          onClick={onCancel}
+          className="min-h-11 shrink-0 rounded-lg bg-rose-700 px-3 text-sm font-bold text-white outline-none focus-visible:ring-2 focus-visible:ring-rose-700 focus-visible:ring-offset-2"
+        >
+          Cancelar
+        </button>
+      ) : (
+        <button
+          type="submit"
+          disabled={!canSend || suggesting}
+          title="Enter envia; Shift+Enter cria linha"
+          className="min-h-11 shrink-0 rounded-lg bg-teal-700 px-3 text-sm font-bold text-white outline-none focus-visible:ring-2 focus-visible:ring-teal-700 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 sm:px-4"
+        >
+          {suggesting
+            ? "A sugerir…"
+            : needsSkillSuggestions
+              ? "Sugerir"
+              : "Enviar"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function ToolbarButton({
+  item,
+  open,
+  onOpen,
+}: {
+  item: { panel: ComposerPanel; label: string; fullLabel: string };
+  open: boolean;
+  onOpen: (panel: ComposerPanel) => void;
+}) {
+  return (
+    <button
+      id={panelTriggerId(item.panel)}
+      type="button"
+      title={item.fullLabel}
+      aria-label={item.fullLabel}
+      aria-expanded={open}
+      aria-controls={panelDialogId(item.panel)}
+      onClick={() => onOpen(item.panel)}
+      className={`flex min-h-11 max-w-[13rem] shrink-0 items-center rounded-lg border px-2 text-xs font-bold outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-teal-700 focus-visible:ring-offset-2 motion-reduce:transition-none ${
+        open
+          ? "border-teal-700 bg-teal-50 text-teal-900"
+          : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50"
+      }`}
+    >
+      <span className="truncate">{item.label}</span>
+    </button>
+  );
+}
+
+function ComposerPanelOverlay({
+  panel,
+  conversation,
+  selectedModel,
+  models,
+  skills,
+  suggestions,
+  suggestedIds,
+  disabled,
+  onClose,
+  onModelChange,
+  onModeChange,
+  onToggleSkill,
+  onToggleSuggested,
+}: {
+  panel: ComposerPanel;
+  conversation: ChatConversation | null;
+  selectedModel: ChatModelOption | null;
+  models: ChatModelOption[];
+  skills: ChatSkillOption[];
+  suggestions: Suggestion[] | null;
+  suggestedIds: string[];
+  disabled: boolean;
+  onClose: () => void;
+  onModelChange: (id: string) => void;
+  onModeChange: (mode: ChatSkillMode) => void;
+  onToggleSkill: (id: string) => void;
+  onToggleSuggested: (id: string) => void;
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const [anchorStyle, setAnchorStyle] = useState<CSSProperties>({});
+  const title = panel === "model" ? "Conta e modelo" : sectionLabel(panel);
+
+  useLayoutEffect(() => {
+    const trigger = document.getElementById(panelTriggerId(panel));
+    const background = trigger?.closest<HTMLElement>("section");
+    const previousOverflow = document.body.style.overflow;
+
+    function updateAnchor() {
+      const rect = trigger?.getBoundingClientRect();
+      if (!rect) return;
+      const visualViewport = window.visualViewport;
+      const viewportHeight = visualViewport?.height ?? window.innerHeight;
+      const viewportTop = visualViewport?.offsetTop ?? 0;
+      const panelWidth = Math.min(512, window.innerWidth - 32);
+      const left = Math.min(
+        Math.max(16, rect.left),
+        window.innerWidth - panelWidth - 16
+      );
+      setAnchorStyle({
+        "--composer-panel-left": `${left}px`,
+        "--composer-panel-bottom": `${window.innerHeight - rect.top + 8}px`,
+        "--composer-panel-height": `${Math.max(
+          120,
+          Math.min(rect.top - 24, viewportHeight * 0.78, 672)
+        )}px`,
+        "--composer-sheet-bottom": `${
+          window.innerHeight - viewportTop - viewportHeight
+        }px`,
+        "--composer-sheet-height": `${Math.min(viewportHeight * 0.78, 672)}px`,
+      } as CSSProperties);
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+
+      if (event.key !== "Tab" || !dialogRef.current) return;
+      const focusable = Array.from(
+        dialogRef.current.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        )
+      );
+      const first = focusable[0];
+      const last = focusable.at(-1);
+      if (!first || !last) return;
+
+      if (!dialogRef.current.contains(document.activeElement)) {
+        event.preventDefault();
+        first.focus();
+      } else if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.body.style.overflow = "hidden";
+    if (background) background.inert = true;
+    updateAnchor();
+    const resizeObserver =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(updateAnchor);
+    if (trigger) resizeObserver?.observe(trigger);
+    window.addEventListener("resize", updateAnchor);
+    window.addEventListener("scroll", updateAnchor, true);
+    window.visualViewport?.addEventListener("resize", updateAnchor);
+    window.visualViewport?.addEventListener("scroll", updateAnchor);
+    document.addEventListener("keydown", handleKeyDown);
+    requestAnimationFrame(() => {
+      focusPanelControl(dialogRef.current);
+    });
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      if (background) background.inert = false;
+      resizeObserver?.disconnect();
+      window.removeEventListener("resize", updateAnchor);
+      window.removeEventListener("scroll", updateAnchor, true);
+      window.visualViewport?.removeEventListener("resize", updateAnchor);
+      window.visualViewport?.removeEventListener("scroll", updateAnchor);
+      document.removeEventListener("keydown", handleKeyDown);
+      trigger?.focus();
+    };
+  }, [onClose, panel]);
+
+  useEffect(() => {
+    if (!dialogRef.current?.contains(document.activeElement)) {
+      focusPanelControl(dialogRef.current);
+    }
+  }, [disabled]);
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-50 bg-slate-950/40 md:bg-transparent"
+      data-testid="composer-panel-overlay"
+    >
+      <button
+        type="button"
+        className="absolute inset-0 cursor-default"
+        aria-label={`Fechar painel ${title}`}
+        onClick={onClose}
+        tabIndex={-1}
+      />
+      <div
+        ref={dialogRef}
+        id={panelDialogId(panel)}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={`${panelDialogId(panel)}-title`}
+        style={anchorStyle}
+        className="fixed inset-x-0 bottom-[var(--composer-sheet-bottom,0px)] flex max-h-[var(--composer-sheet-height,78dvh)] flex-col rounded-t-2xl bg-white shadow-2xl outline-none md:inset-x-auto md:bottom-[var(--composer-panel-bottom)] md:left-[var(--composer-panel-left)] md:max-h-[var(--composer-panel-height)] md:w-[min(32rem,calc(100vw-2rem))] md:rounded-2xl md:border md:border-slate-200"
+        data-responsive-variant="popover-desktop sheet-mobile"
+      >
+        <div className="flex min-h-14 shrink-0 items-center justify-between gap-3 border-b border-slate-100 px-4">
+          <div className="min-w-0">
+            <h2
+              id={`${panelDialogId(panel)}-title`}
+              className="truncate font-bold text-slate-950"
+            >
+              {title}
+            </h2>
+            {disabled && (
+              <p className="text-xs text-slate-500">
+                Apenas leitura enquanto a resposta está em curso.
+              </p>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="min-h-11 shrink-0 rounded-lg px-3 text-sm font-bold text-slate-600 outline-none hover:bg-slate-100 focus-visible:ring-2 focus-visible:ring-teal-700"
+          >
+            Fechar
+          </button>
+        </div>
+        <div className="min-h-0 overflow-y-auto overscroll-contain p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+          {panel === "model" ? (
+            <label className="block text-sm font-bold text-slate-700">
+              Conta e modelo
+              <select
+                data-autofocus
+                value={selectedModel?.id ?? ""}
+                aria-label="Conta e modelo para a próxima mensagem"
+                disabled={!conversation || disabled || models.length === 0}
+                onChange={(event) => onModelChange(event.target.value)}
+                className="mt-2 min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-normal outline-none focus:border-teal-700 focus:ring-2 focus:ring-teal-700/20 disabled:cursor-not-allowed disabled:bg-slate-100"
+              >
+                {models.length === 0 && (
+                  <option value="">Sem predefinição LLM ativa</option>
+                )}
+                {models.map((model) => (
+                  <option key={model.id} value={model.id}>
+                    {providerLabel(model.provider)} · {model.accountName} ·{" "}
+                    {model.modelName}
+                  </option>
+                ))}
+              </select>
+              <span className="mt-2 block text-xs font-normal text-slate-500">
+                A escolha aplica-se à próxima mensagem desta conversa.
+              </span>
+            </label>
+          ) : (
+            <SelectorPanel
+              section={panel}
+              conversation={conversation}
+              skills={skills}
+              suggestedIds={suggestedIds}
+              suggestions={suggestions}
+              disabled={disabled}
+              onModeChange={onModeChange}
+              onToggleSkill={onToggleSkill}
+              onToggleSuggested={onToggleSuggested}
+            />
+          )}
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
 function SelectorPanel({
   section,
   conversation,
@@ -759,25 +1118,32 @@ function SelectorPanel({
 
   if (section !== "skills") {
     return (
-      <div className="mt-3 rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4">
-        <p className="text-sm font-bold text-slate-800">
-          {section === "tools" ? "Tools" : "Agentes"}
-        </p>
-        <p className="mt-1 text-sm text-slate-500">
-          Não existem opções nem execução desta categoria nesta fase.
-        </p>
-        <div className="mt-3 flex gap-2" aria-label="Modos indisponíveis">
-          {["Automático", "Manual"].map((mode) => (
+      <div className="space-y-2" data-testid={`${section}-empty-state`}>
+        <div
+          className="sticky top-0 z-[1] flex rounded-lg border border-slate-300 bg-white p-1"
+          role="group"
+          aria-label={`Modo de seleção de ${sectionLabel(section)}`}
+        >
+          {(["automatic", "manual"] as const).map((mode) => (
             <button
               key={mode}
               type="button"
               disabled
-              className="min-h-9 rounded-lg border border-slate-200 px-3 text-xs text-slate-400"
+              aria-pressed={mode === "automatic"}
+              className={`min-h-11 flex-1 rounded-md px-2 text-xs font-bold md:min-h-9 ${
+                mode === "automatic"
+                  ? "bg-slate-200 text-slate-600"
+                  : "text-slate-400"
+              }`}
             >
-              {mode}
+              {mode === "automatic" ? "Automático" : "Manual"}
             </button>
           ))}
         </div>
+        <p className="rounded-lg border border-dashed border-slate-300 bg-white p-3 text-xs leading-5 text-slate-500">
+          Ainda não existem {sectionLabel(section)} disponíveis nem execução
+          desta categoria nesta fase.
+        </p>
       </div>
     );
   }
@@ -790,21 +1156,24 @@ function SelectorPanel({
   const automatic = conversation?.skill_mode === "automatic";
 
   return (
-    <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
+    <div>
+      <div className="sticky top-0 z-[1] flex flex-wrap items-center justify-between gap-2 bg-slate-50 pb-2">
         <div
           className="flex rounded-lg border border-slate-300 bg-white p-1"
           role="group"
-          aria-label="Modo de seleção de Skills"
+          aria-label="Modo de seleção de Skills do Carcanhol"
         >
           {(["automatic", "manual"] as const).map((mode) => (
             <button
               key={mode}
               type="button"
+              data-autofocus={
+                conversation?.skill_mode === mode ? true : undefined
+              }
               aria-pressed={conversation?.skill_mode === mode}
               disabled={!conversation || disabled}
               onClick={() => onModeChange(mode)}
-              className={`min-h-9 rounded-md px-3 text-xs font-bold ${
+              className={`min-h-11 rounded-md px-3 text-xs font-bold md:min-h-9 ${
                 conversation?.skill_mode === mode
                   ? "bg-teal-700 text-white"
                   : "text-slate-600"
@@ -822,9 +1191,9 @@ function SelectorPanel({
       </div>
 
       {automatic && suggestions === null ? (
-        <p className="mt-3 text-sm text-slate-500">
-          Escreva a mensagem e peça sugestões. Apenas nomes e descrições são
-          usados nessa etapa.
+        <p className="rounded-lg border border-dashed border-slate-300 bg-white p-3 text-xs leading-5 text-slate-500">
+          Escreva a mensagem e peça sugestões de Skills do Carcanhol. Apenas
+          nomes e descrições são usados nessa etapa.
         </p>
       ) : (
         <>
@@ -833,13 +1202,13 @@ function SelectorPanel({
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Pesquisar Skills"
-            aria-label="Pesquisar Skills"
-            className="mt-3 min-h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm"
+            aria-label="Pesquisar Skills do Carcanhol"
+            className="min-h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm outline-none focus:border-teal-700 focus:ring-2 focus:ring-teal-700/20"
           />
-          <div className="mt-2 max-h-40 space-y-1 overflow-y-auto">
+          <div className="mt-2 space-y-1">
             {filtered.length === 0 ? (
               <p className="p-2 text-sm text-slate-500">
-                Não existem Skills ativas correspondentes.
+                Não existem Skills do Carcanhol ativas correspondentes.
               </p>
             ) : (
               filtered.map((skill) => {
@@ -944,7 +1313,9 @@ function MessageBubble({
         <p className="mt-2 text-[11px] text-slate-400">
           {providerLabel(message.provider ?? "")} · {message.account_name} ·{" "}
           {message.model_name}
-          {audit.length > 0 ? ` · Skills: ${audit.join(", ")}` : ""}
+          {audit.length > 0
+            ? ` · Skills do Carcanhol: ${audit.join(", ")}`
+            : ""}
         </p>
       )}
     </article>
@@ -1057,10 +1428,28 @@ function providerLabel(provider: string) {
 
 function sectionLabel(section: SelectorSection) {
   return section === "skills"
-    ? "Skills"
+    ? "Skills do Carcanhol"
     : section === "tools"
-      ? "Tools"
-      : "Agentes";
+      ? "Tools do Carcanhol"
+      : "Agentes do Carcanhol";
+}
+
+function panelTriggerId(panel: ComposerPanel) {
+  return `composer-${panel}-trigger`;
+}
+
+function panelDialogId(panel: ComposerPanel) {
+  return `composer-${panel}-panel`;
+}
+
+function focusPanelControl(dialog: HTMLElement | null) {
+  const preferred = dialog?.querySelector<HTMLElement>(
+    "[data-autofocus]:not([disabled])"
+  );
+  const fallback = dialog?.querySelector<HTMLElement>(
+    'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+  );
+  (preferred ?? fallback)?.focus();
 }
 
 async function apiRequest<T>(

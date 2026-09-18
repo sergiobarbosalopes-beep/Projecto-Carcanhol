@@ -119,13 +119,111 @@ test("cancelled and failed responses remain visibly terminal and retry is idempo
 });
 
 test("Tools and Agents have no execution path and assistant output is plain text", () => {
-  assert.match(workspace, /Não existem opções nem execução desta categoria/);
+  assert.match(workspace, /Ainda não existem \{sectionLabel\(section\)\}/);
   assert.doesNotMatch(workspace, /dangerouslySetInnerHTML/);
   assert.doesNotMatch(
     `${streamRoute}\n${repository}`,
     /availableTools|mcpServers|customAgents|tool\.execution/
   );
   assert.match(workspace, /whitespace-pre-wrap/);
+});
+
+test("chat composer is sticky with the textarea before the compact toolbar", () => {
+  assert.match(workspace, /data-testid="chat-composer"/);
+  assert.match(workspace, /className="sticky bottom-0/);
+  assert.match(workspace, /safe-area-inset-bottom/);
+  assert.match(workspace, /data-testid="chat-composer-form"/);
+  assert.match(workspace, /data-testid="composer-toolbar"/);
+  assert.match(workspace, /data-testid="composer-toolbar-controls"/);
+  assert.match(workspace, /overflow-x-auto/);
+  assert.match(workspace, /Enter envia; Shift\+Enter cria linha/);
+
+  const composer = workspace.slice(
+    workspace.indexOf('data-testid="chat-composer"'),
+    workspace.indexOf("{deleteId &&")
+  );
+  assert.ok(composer.indexOf('id="chat-message"') >= 0);
+  assert.ok(
+    composer.indexOf('id="chat-message"') <
+      composer.indexOf("<ComposerToolbar"),
+    "textarea must precede the toolbar in DOM order"
+  );
+  assert.doesNotMatch(
+    workspace,
+    /ContextOverview|context-card-|md:grid-cols-3/
+  );
+});
+
+test("context controls open one accessible desktop popover or mobile sheet", () => {
+  assert.match(workspace, /type ComposerPanel = SelectorSection \| "model"/);
+  assert.match(workspace, /current === panel \? null : panel/);
+  assert.match(workspace, /aria-expanded=\{open\}/);
+  assert.match(workspace, /aria-controls=\{panelDialogId\(item\.panel\)\}/);
+  assert.match(workspace, /role="dialog"/);
+  assert.match(workspace, /aria-modal="true"/);
+  assert.match(
+    workspace,
+    /data-responsive-variant="popover-desktop sheet-mobile"/
+  );
+  assert.match(workspace, /createPortal/);
+  assert.match(workspace, /event\.key === "Escape"/);
+  assert.match(workspace, /onClick=\{onClose\}/);
+  assert.match(workspace, /trigger\?\.focus\(\)/);
+  assert.match(workspace, /window\.visualViewport\?\.addEventListener/);
+  assert.match(workspace, /safe-area-inset-bottom/);
+});
+
+test("Skill controls and draft state stay owned by the chat workspace", () => {
+  assert.match(
+    workspace,
+    /const \[composer, setComposer\] = useState\(""\)[\s\S]+<ComposerPanelOverlay/
+  );
+  assert.match(workspace, /\(\["automatic", "manual"\] as const\)\.map/);
+  assert.match(
+    workspace,
+    /aria-pressed=\{conversation\?\.skill_mode === mode\}/
+  );
+  assert.match(workspace, /onToggleSuggested\(skill\.id\)/);
+  assert.match(workspace, /onToggleSkill\(skill\.id\)/);
+  assert.match(
+    workspace,
+    /needsSkillSuggestions=\{\s*selected\?\.skill_mode === "automatic" && suggestions === null\s*\}/
+  );
+  assert.match(
+    workspace,
+    /suggesting\s*\?\s*"A sugerir…"\s*:\s*needsSkillSuggestions\s*\?\s*"Sugerir"\s*:\s*"Enviar"/
+  );
+  assert.match(workspace, /placeholder="Pesquisar Skills"/);
+  assert.match(workspace, /aria-label="Pesquisar Skills do Carcanhol"/);
+  assert.match(workspace, /data-testid=\{`\$\{section\}-empty-state`\}/);
+  assert.match(workspace, /aria-label=\{`Modo de seleção de \$\{sectionLabel/);
+  assert.match(workspace, /aria-pressed=\{mode === "automatic"\}/);
+  assert.match(workspace, /value=\{composer\}/);
+  assert.match(workspace, /setOpenPanel\(\(current\)/);
+});
+
+test("toolbar exposes only Carcanhol capability selectors", () => {
+  assert.match(workspace, /Skills do Carcanhol/);
+  assert.match(workspace, /Tools do Carcanhol/);
+  assert.match(workspace, /Agentes do Carcanhol/);
+  assert.match(workspace, /Modo de seleção de Skills do Carcanhol/);
+  assert.doesNotMatch(workspace, /panel: "copilot"/);
+  assert.doesNotMatch(workspace, /copilot-capabilities-summary/);
+  assert.doesNotMatch(workspace, /GitHub Copilot automático/);
+  assert.doesNotMatch(workspace, /Skills GitHub Copilot|Tools GitHub Copilot/);
+});
+
+test("streaming scroll follows only users who remain near the thread end", () => {
+  assert.match(workspace, /userNearBottomRef/);
+  assert.match(
+    workspace,
+    /thread\.scrollHeight - thread\.scrollTop - thread\.clientHeight < 120/
+  );
+  assert.match(workspace, /if \(userNearBottomRef\.current\)/);
+  assert.match(workspace, /threadRef\.current\?\.scrollTo/);
+  assert.match(workspace, /behavior: streaming \? "auto" : "smooth"/);
+  assert.match(workspace, /onScroll=\{handleThreadScroll\}/);
+  assert.match(workspace, /userNearBottomRef\.current = true/);
 });
 
 function read(path) {

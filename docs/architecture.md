@@ -26,12 +26,17 @@ A Fase 4 acrescenta Chat textual à fundação de produto e administração:
 - conversas e mensagens persistentes por utilizador, protegidas por RLS;
 - streaming progressivo, cancelamento e retry idempotente;
 - conta/modelo efetivos e Skills versionadas auditados por resposta;
-- seleção manual ou sugestão automática de Skills, sempre confirmada;
+- seleção manual ou sugestão automática de Skills do Carcanhol, sempre
+  confirmada;
+- capacidades GitHub Copilot disponíveis e compatíveis geridas
+  automaticamente pelo runtime, sem controlos manuais na UI;
 - envelopes AES-256-GCM de credenciais numa tabela service-only.
 
 Pesquisa, Análises e dados financeiros não estão implementados. Tools e
-Agentes não têm opções nem execução; a sua presença no seletor é apenas um
-estado vazio explícito.
+Agentes do Carcanhol não têm opções nem execução; a sua presença no seletor é
+apenas um estado vazio explícito. Isto não ativa tools, skills ou agentes
+built-in do GitHub Copilot: capability discovery, permissões e guardrails
+continuam internos e constituem trabalho arquitetural posterior.
 
 ## 2. Arquitetura de execução
 
@@ -530,7 +535,7 @@ Os deltas são efémeros e não são apresentados como resumíveis. Repetir o me
 `client_request_id` nunca duplica mensagens; uma nova tentativa usa uma chave
 nova e liga-se à user message original.
 
-### Skills e premissas
+### Skills do Carcanhol e premissas
 
 `src/admin/skills.ts` exporta:
 
@@ -544,7 +549,14 @@ exigir ownership + membership, pelo que falham fechados e não aceitam a injeç�
 de um cliente service role. O Chat resolve novamente ownership, estado `active` e versão de cada ID no
 servidor. O browser nunca envia conteúdo de Skills. O conteúdo confirmado é
 ordenado, delimitado e incorporado como system context textual; não ativa o
-runtime nativo de Skills do Copilot.
+runtime nativo de Skills do Copilot. O modo Automático/Manual aplica-se apenas
+às capacidades criadas no Projecto Carcanhol. Capacidades GitHub Copilot
+disponíveis e compatíveis são geridas automaticamente pelo runtime e não têm
+configuração, indicador, checkboxes ou controlos de seleção no composer. O
+textarea surge imediatamente depois do histórico; a toolbar compacta fica
+abaixo e abre a configuração Carcanhol num popover ancorado em desktop ou
+bottom sheet em mobile. Só existe um detalhe aberto, com Escape, click
+exterior, focus trap e retorno do foco ao trigger.
 
 `POST /api/admin/skills/generate` valida uma descrição até 2 000 caracteres,
 aplica rate limit por utilizador e IP e permite apenas uma geração simultânea
