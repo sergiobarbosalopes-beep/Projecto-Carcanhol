@@ -200,6 +200,114 @@ test("streams only ordered allowlisted NDJSON events for a signed request", asyn
   }
 });
 
+test("adds one error terminal when a tool stream returns without a terminal event", async () => {
+  const requestId = "9718c7fc-6774-4075-af87-a11b65de6cf0";
+  const server = createCopilotWorkerServer({
+    hmacSecret: secret,
+    validate: async ({ requestId: id }) => ({
+      ok: false,
+      requestId: id,
+      code: "unknown",
+    }),
+    inferStream: async (request, _signal, emit) => {
+      await emit({ v: 1, type: "start", requestId: request.requestId });
+      await emit({
+        v: 1,
+        type: "tool",
+        requestId: request.requestId,
+        tool: "web_fetch",
+        status: "started",
+        source: { url: "https://example.com/source" },
+      });
+      await emit({
+        v: 1,
+        type: "tool",
+        requestId: request.requestId,
+        tool: "web_fetch",
+        status: "completed",
+        source: {
+          url: "https://example.com/source",
+          title: "Example source",
+        },
+      });
+      await emit({
+        v: 1,
+        type: "sources",
+        requestId: request.requestId,
+        sources: [
+          {
+            url: "https://example.com/source",
+            title: "Example source",
+          },
+        ],
+      });
+    },
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+
+  try {
+    const events = await fetchStreamEvents(server, requestId);
+
+    assert.deepEqual(
+      events.map((event) => event.type),
+      ["start", "tool", "tool", "sources", "error"]
+    );
+    assert.equal(events.at(-1).code, "invalid_response");
+    assert.equal(
+      events.filter((event) => event.type === "done" || event.type === "error")
+        .length,
+      1
+    );
+  } finally {
+    server.close();
+    await once(server, "close");
+  }
+});
+
+test("adds one error terminal when inference throws after partial output", async () => {
+  const requestId = "b87692a4-51ea-4d05-a4dc-ddf82e86c240";
+  const server = createCopilotWorkerServer({
+    hmacSecret: secret,
+    validate: async ({ requestId: id }) => ({
+      ok: false,
+      requestId: id,
+      code: "unknown",
+    }),
+    inferStream: async (request, _signal, emit) => {
+      await emit({ v: 1, type: "start", requestId: request.requestId });
+      await emit({
+        v: 1,
+        type: "delta",
+        requestId: request.requestId,
+        sequence: 1,
+        text: "partial",
+      });
+      throw new Error("provider stream failed");
+    },
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+
+  try {
+    const events = await fetchStreamEvents(server, requestId);
+
+    assert.deepEqual(
+      events.map((event) => event.type),
+      ["start", "delta", "error"]
+    );
+    assert.equal(events.at(-1).code, "invalid_response");
+    assert.equal(
+      events.filter((event) => event.type === "done" || event.type === "error")
+        .length,
+      1
+    );
+  } finally {
+    server.close();
+    await once(server, "close");
+  }
+});
+
 test("rejects malformed and oversized public stream events", () => {
   assert.equal(
     copilotStreamEventSchema.safeParse({
@@ -233,6 +341,42 @@ test("rejects malformed and oversized public stream events", () => {
     false
   );
 });
+
+async function fetchStreamEvents(server, requestId) {
+  const address = server.address();
+  assert.equal(typeof address, "object");
+  const body = JSON.stringify({
+    requestId,
+    token,
+    model: "claude-haiku-4.5",
+    prompt: "Read a source",
+  });
+  const headers = createSignedWorkerHeaders({
+    body,
+    method: "POST",
+    path: COPILOT_STREAM_PATH,
+    requestId,
+    secret,
+  });
+  const response = await fetch(
+    `http://127.0.0.1:${address.port}${COPILOT_STREAM_PATH}`,
+    {
+      method: "POST",
+      body,
+      headers: {
+        ...headers,
+        Accept: "application/x-ndjson",
+        "Content-Type": "application/json",
+      },
+    }
+  );
+
+  assert.equal(response.status, 200);
+  return (await response.text())
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+}
 
 test("serves health without details and validates only authenticated strict requests", async () => {
   const server = createCopilotWorkerServer({

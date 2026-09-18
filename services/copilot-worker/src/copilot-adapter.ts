@@ -16,6 +16,12 @@ import {
   type CopilotPremiumInteractionsQuota,
 } from "./contract";
 import type { CopilotRuntimeClient, CopilotRuntimeFactory } from "./runtime";
+import {
+  createWebFetchPermissionHandler,
+  sanitizePublicHttpsUrl,
+  sanitizeWebSource,
+  type SafeWebSource,
+} from "./web-fetch-policy";
 
 type AccountGetQuotaResult = Awaited<
   ReturnType<CopilotClient["rpc"]["account"]["getQuota"]>
@@ -28,6 +34,17 @@ export const denyAllPermissions: PermissionHandler = () => ({
   kind: "reject",
   feedback: "Tool execution is disabled by service policy.",
 });
+
+const WEB_FETCH_TOOL = "web_fetch";
+const WEB_FETCH_MAX_RESULT_BYTES = 1_000_000;
+const WEB_FETCH_ALLOWED_CONTENT_TYPES = new Set([
+  "application/json",
+  "application/xhtml+xml",
+  "application/xml",
+  "text/html",
+  "text/plain",
+  "text/xml",
+]);
 
 export const createCopilotSdkRuntime: CopilotRuntimeFactory = async (
   token,
@@ -254,10 +271,21 @@ export function createInferenceSessionConfig(
   sessionId: string,
   model: string,
   systemPrompt?: string,
-  streaming = false
+  streaming = false,
+  enableWebFetch = false,
+  onPermissionRequest = enableWebFetch
+    ? createWebFetchPermissionHandler()
+    : denyAllPermissions
 ): SessionConfig {
   return {
     ...createIsolatedSessionConfig(token, sessionId),
+    ...(enableWebFetch
+      ? {
+          availableTools: [`builtin:${WEB_FETCH_TOOL}`],
+          excludedTools: ["mcp:*", "custom:*"],
+          onPermissionRequest,
+        }
+      : {}),
     model,
     streaming,
     ...(systemPrompt
@@ -397,7 +425,7 @@ export async function runCopilotStreamingInference({
   }
 }
 
-async function streamWithSession(
+export async function streamWithSession(
   client: Pick<CopilotClient, "createSession" | "deleteSession">,
   token: string,
   sessionId: string,
@@ -417,10 +445,18 @@ async function streamWithSession(
   let terminal = false;
   let writeChain = Promise.resolve();
   let writeFailure: unknown;
+  const webFetchToolCalls = new Set<string>();
 
   try {
     session = await client.createSession(
-      createInferenceSessionConfig(token, sessionId, model, systemPrompt, true)
+      createInferenceSessionConfig(
+        token,
+        sessionId,
+        model,
+        systemPrompt,
+        true,
+        true
+      )
     );
     const activeSession = session;
     const abortSession = () =>
@@ -465,11 +501,94 @@ async function streamWithSession(
           });
       }
     );
+    const unsubscribeToolStart = activeSession.on(
+      "tool.execution_start",
+      (event) => {
+        if (
+          terminal ||
+          event.agentId ||
+          event.data.toolName !== WEB_FETCH_TOOL
+        ) {
+          return;
+        }
+
+        webFetchToolCalls.add(event.data.toolCallId);
+        const source = sourceFromToolArguments(event.data.arguments);
+        queueSafeEvent({
+          v: 1,
+          type: "tool",
+          requestId: sessionId,
+          tool: WEB_FETCH_TOOL,
+          status: "started",
+          ...(source ? { source } : {}),
+        });
+      }
+    );
+    const unsubscribeToolComplete = activeSession.on(
+      "tool.execution_complete",
+      (event) => {
+        if (
+          terminal ||
+          event.agentId ||
+          !webFetchToolCalls.delete(event.data.toolCallId)
+        ) {
+          return;
+        }
+
+        if (!isSafeWebFetchResult(event.data.result)) {
+          terminal = true;
+          void activeSession.abort();
+          return;
+        }
+
+        const sources = sanitizeWebSources(event.data.result?.citableSources);
+        queueSafeEvent({
+          v: 1,
+          type: "tool",
+          requestId: sessionId,
+          tool: WEB_FETCH_TOOL,
+          status: "completed",
+          ...(sources[0] ? { source: sources[0] } : {}),
+        });
+
+        if (sources.length > 0) {
+          queueSafeEvent({
+            v: 1,
+            type: "sources",
+            requestId: sessionId,
+            sources,
+          });
+        }
+      }
+    );
     const unsubscribeFinal = activeSession.on("assistant.message", (event) => {
-      if (!event.agentId) {
+      if (!terminal && !event.agentId) {
         finalContent = event.data.content;
+        const sources = sanitizeWebSources(event.data.citations?.sources);
+        if (sources.length > 0) {
+          queueSafeEvent({
+            v: 1,
+            type: "sources",
+            requestId: sessionId,
+            sources,
+          });
+        }
       }
     });
+
+    function queueSafeEvent(event: CopilotStreamEvent) {
+      if (terminal) {
+        return;
+      }
+
+      writeChain = writeChain
+        .then(() => emit(event))
+        .catch((error: unknown) => {
+          writeFailure ??= error;
+          terminal = true;
+          void activeSession.abort();
+        });
+    }
 
     try {
       await emit({ v: 1, type: "start", requestId: sessionId });
@@ -530,8 +649,138 @@ async function streamWithSession(
     } finally {
       terminal = true;
       unsubscribeDelta();
+      unsubscribeToolStart();
+      unsubscribeToolComplete();
       unsubscribeFinal();
       signal.removeEventListener("abort", abortSession);
+    }
+
+    function sourceFromToolArguments(
+      value: unknown
+    ): SafeWebSource | undefined {
+      if (
+        typeof value !== "object" ||
+        value === null ||
+        !("url" in value) ||
+        typeof value.url !== "string"
+      ) {
+        return undefined;
+      }
+
+      const url = sanitizePublicHttpsUrl(value.url);
+      return url ? { url } : undefined;
+    }
+
+    function sanitizeWebSources(value: unknown): SafeWebSource[] {
+      if (!Array.isArray(value)) {
+        return [];
+      }
+
+      const sources = new Map<string, SafeWebSource>();
+      for (const candidate of value.slice(0, 32)) {
+        const source = sanitizeWebSource(candidate);
+        if (source && !sources.has(source.url)) {
+          sources.set(source.url, source);
+        }
+        if (sources.size === 16) {
+          break;
+        }
+      }
+
+      return [...sources.values()];
+    }
+
+    function isSafeWebFetchResult(value: unknown) {
+      if (typeof value !== "object" || value === null) {
+        return false;
+      }
+
+      const result = value as {
+        content?: unknown;
+        detailedContent?: unknown;
+        binaryResultsForLlm?: unknown;
+        contents?: unknown;
+        citableSources?: unknown;
+      };
+      let totalBytes = 0;
+      const addText = (text: unknown) => {
+        if (typeof text !== "string") {
+          return false;
+        }
+        totalBytes += Buffer.byteLength(text);
+        return totalBytes <= WEB_FETCH_MAX_RESULT_BYTES;
+      };
+
+      if (!addText(result.content)) {
+        return false;
+      }
+      if (
+        result.detailedContent !== undefined &&
+        !addText(result.detailedContent)
+      ) {
+        return false;
+      }
+      if (
+        Array.isArray(result.binaryResultsForLlm) &&
+        result.binaryResultsForLlm.length > 0
+      ) {
+        return false;
+      }
+      if (
+        Array.isArray(result.citableSources) &&
+        result.citableSources.length > 32
+      ) {
+        return false;
+      }
+      if (Array.isArray(result.citableSources)) {
+        for (const source of result.citableSources.slice(0, 32)) {
+          if (
+            typeof source !== "object" ||
+            source === null ||
+            !addText((source as { content?: unknown }).content)
+          ) {
+            return false;
+          }
+        }
+      }
+      if (Array.isArray(result.contents)) {
+        for (const content of result.contents) {
+          if (typeof content !== "object" || content === null) {
+            return false;
+          }
+          const block = content as {
+            type?: unknown;
+            text?: unknown;
+            resource?: {
+              text?: unknown;
+              blob?: unknown;
+              mimeType?: unknown;
+            };
+          };
+          if (block.type === "text") {
+            if (!addText(block.text)) {
+              return false;
+            }
+          } else if (block.type === "resource") {
+            const mimeType =
+              typeof block.resource?.mimeType === "string"
+                ? block.resource.mimeType.split(";")[0]?.trim().toLowerCase()
+                : "text/plain";
+            if (
+              block.resource?.blob !== undefined ||
+              !mimeType ||
+              !WEB_FETCH_ALLOWED_CONTENT_TYPES.has(mimeType) ||
+              !addText(block.resource?.text)
+            ) {
+              return false;
+            }
+          } else {
+            return false;
+          }
+        }
+      }
+
+      return true;
     }
   } finally {
     const activeSession = session;

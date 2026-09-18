@@ -18,6 +18,12 @@ temporário `0700` removido no fim. Cada validação cria uma sessão request-bo
 sem tools, MCP, agents, skills, memory, telemetry ou session store;
 `denyAllPermissions` rejeita qualquer permission request inesperada.
 
+As sessões de inferência do Chat mantêm a mesma fronteira, mas permitem
+exclusivamente `builtin:web_fetch`. O permission handler aceita apenas HTTPS
+público após validação de URL e DNS; redirects são revalidados e todas as
+outras Tools/permissões continuam negadas. O stream expõe apenas estado da
+leitura e URL/título sanitizados, nunca argumentos, query, corpo ou erros.
+
 A inferência aceita apenas `requestId`, token, modelo, prompt limitado e um
 system prompt opcional controlado pelo BFF no path exato
 `/v1/copilot/infer`. O modelo e o system prompt vêm do BFF, nunca do browser.
@@ -195,6 +201,16 @@ Teste real, sempre opt-in:
 ```bash
 COPILOT_REAL_TEST_TOKEN=github_pat_... npm run test:real
 ```
+
+Smoke opt-in de leitura real de uma página oficial conhecida:
+
+```bash
+COPILOT_REAL_TEST_TOKEN=github_pat_... npm run test:web-real
+```
+
+O smoke exige token temporário explícito, usa
+`https://docs.github.com/en/copilot`, confirma execução de `web_fetch` e uma
+fonte allowlisted, e falha sem esses sinais. Não testa descoberta/pesquisa web.
 
 O comando só apresenta o código sanitizado ou o número de modelos. CI usa um
 adapter mock e nunca consome Copilot real.

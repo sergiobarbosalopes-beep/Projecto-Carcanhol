@@ -1,7 +1,7 @@
 # Arquitetura — Projecto Carcanhol
 
-Versão: 4.0
-Estado: Fase 4 implementada
+Versão: 4.1
+Estado: Fase 4 com leitura web implementada
 
 ## 1. Objetivo e âmbito atual
 
@@ -30,13 +30,15 @@ A Fase 4 acrescenta Chat textual à fundação de produto e administração:
   confirmada;
 - capacidades GitHub Copilot disponíveis e compatíveis geridas
   automaticamente pelo runtime, sem controlos manuais na UI;
+- leitura automática de páginas HTTPS públicas por `builtin:web_fetch`, com
+  fontes visíveis e sem seletor;
 - envelopes AES-256-GCM de credenciais numa tabela service-only.
 
-Pesquisa, Análises e dados financeiros não estão implementados. Tools e
+Pesquisa aberta, Análises e dados financeiros não estão implementados. Tools e
 Agentes do Carcanhol não têm opções nem execução; a sua presença no seletor é
-apenas um estado vazio explícito. Isto não ativa tools, skills ou agentes
-built-in do GitHub Copilot: capability discovery, permissões e guardrails
-continuam internos e constituem trabalho arquitetural posterior.
+apenas um estado vazio explícito. A única Tool Copilot ativa no Chat é
+`builtin:web_fetch`: lê um URL conhecido, mas não encontra URLs nem equivale a
+GitHub Copilot Research.
 
 ## 2. Arquitetura de execução
 
@@ -57,7 +59,8 @@ Next.js 16 App Router / Vercel
         ├─ endpoints estritos validate e infer
         ├─ @github/copilot-sdk 1.0.14 / CLI 1.0.85, mode: empty
         ├─ inferência one-shot e streaming oficial de message deltas
-        ├─ sem tools, MCP, agentes, skills nativas, memory ou session store
+        ├─ Chat: apenas builtin:web_fetch; validação: zero tools
+        ├─ sem MCP, agentes, skills nativas, filesystem, shell, memory ou store
         └─ timeout, concorrência e replay bounded
   │
   ▼
@@ -161,6 +164,66 @@ Cada Skill usada regista ID, nome, `updated_at` observado como versão e
 SHA-256 do conteúdo. O Markdown não é duplicado na mensagem. Esta combinação
 preserva a prova da versão efetivamente usada mesmo que a Skill mude depois,
 sem guardar prompts internos ou conteúdo redundante.
+
+### Leitura web
+
+As sessões de validação continuam com todas as Tools excluídas. As sessões de
+Chat usam `mode: empty` e uma allowlist de uma única entrada,
+`builtin:web_fetch`; `mcp:*` e `custom:*` são negadas e nenhuma Tool de
+filesystem, shell, escrita ou coordenação é registada.
+
+O permission handler só aprova pedidos `kind: url` depois de validar HTTPS,
+porta 443, ausência de credenciais e IP literals, hostname não local e
+resolução DNS exclusivamente para endereços públicos. Cada redirect volta a
+passar pela validação. Pedidos de bypass da sandbox, aprovação humana gerida,
+timeouts DNS, respostas vazias/mistas ou qualquer outro tipo de permissão são
+negados. O processo filho recebe um ambiente mínimo, sem tokens de aplicação,
+cookies, proxies ou material de autenticação para enviar ao destino.
+
+O runtime trata páginas como dados hostis. O system prompt proíbe seguir
+instruções encontradas no conteúdo e proíbe alegar pesquisa. Para o browser,
+o worker emite apenas estado iniciado/concluído e fontes HTTPS sanitizadas;
+remove credenciais, query e fragment, limita contagens/comprimentos e nunca
+transporta argumentos, corpo da página, prompts, erros internos ou conteúdo
+de citações. O JSON `usage` já existente guarda apenas tokens e a lista mínima
+`webSources` (`url`, `title`), evitando uma migration.
+
+Esta camada reduz SSRF por validação DNS prévia; a proteção contra rebinding no
+instante da ligação continua dependente da sandbox/rede do `web_fetch`
+oficial. A aplicação não substitui nem faz proxy do fetch, para não introduzir
+um segundo caminho de rede com cookies ou headers próprios.
+
+### Limite estável e futura pesquisa aberta
+
+Em 2026-09-18, a versão estável mais recente é
+`@github/copilot-sdk` 1.0.14, que inclui CLI 1.0.85. A matriz oficial mantém
+Deep Research (`/research`) como
+[CLI-only](https://docs.github.com/copilot/how-tos/copilot-sdk/troubleshooting/compatibility);
+não existe agente Research nem API pública estável para uma app SDK
+multi-user. O SDK permite filtros genéricos de Tools, mas `web_fetch` está fora
+de `BuiltInTools.Isolated`; por isso esta ativação é explícita e restrita.
+
+Uma futura Tool Carcanhol `web_search` deve usar uma API documentada, nunca
+scraping HTML de motores, e seguir:
+
+```text
+query -> search API -> selecionar fontes -> web_fetch -> sintetizar
+      -> citações + data da fonte + incerteza
+```
+
+Shortlist a validar com um benchmark português/inglês de atualidade,
+autoridade da fonte, duplicados, latência, custo e precisão de citações:
+
+| API                                                                           | Adequação inicial                                                          | Custo/privacy a confirmar                                            |
+| ----------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| [Tavily](https://docs.tavily.com/documentation/api-reference/endpoint/search) | integração oficial Vercel AI SDK, modos general/news e free tier publicado | política permite uso de queries para melhoria salvo acordo diferente |
+| [Exa](https://exa.ai/docs/reference/search)                                   | SDK Vercel tipado, filtros de publicação e live crawl                      | ZDR é opção Enterprise                                               |
+| [Brave Search API](https://api-dashboard.search.brave.com/app/documentation)  | índice independente, Web e News, REST server-side                          | confirmar pricing atual e retenção contratual no dashboard           |
+| [Perplexity Search API](https://docs.perplexity.ai/api-reference/search-post) | resultados estruturados com datas e filtros de recência                    | ZDR publicado não deve ser presumido para Search/Agent               |
+
+Não é integrada nenhuma destas APIs nesta fase e não é pedida nem armazenada
+qualquer API key. `web_fetch` melhora respostas sobre URLs conhecidas; perguntas
+abertas atuais continuam sem descoberta de fontes e devem declarar esse limite.
 
 ### `carcanhol.profiles`
 

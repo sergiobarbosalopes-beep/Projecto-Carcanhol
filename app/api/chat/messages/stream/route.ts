@@ -24,11 +24,11 @@ import {
 } from "@/src/http/api";
 import { consumeUserAndIpRateLimit } from "@/src/http/rate-limit";
 import { acquireRequestSlot } from "@/src/http/request-slot";
+import { relayCopilotWorkerStream } from "@/src/chat/worker-stream-relay";
 import {
   LlmInferenceTimeoutError,
   openLlmInferenceStream,
 } from "@/src/llm/inference";
-import type { Json } from "@/src/types/supabase";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -125,8 +125,6 @@ export async function POST(request: Request) {
         const send = (event: PublicChatStreamEvent) => {
           controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
         };
-        let content = "";
-        let terminalPersisted = false;
 
         send({
           v: 1,
@@ -138,126 +136,36 @@ export async function POST(request: Request) {
         });
 
         try {
-          const reader = worker.response.body!.getReader();
-          const decoder = new TextDecoder();
-          let buffer = "";
-          let totalBytes = 0;
-          let expectedSequence = 1;
-
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            totalBytes += value.byteLength;
-            if (totalBytes > COPILOT_WORKER_MAX_RESPONSE_BYTES) {
-              await reader.cancel();
-              throw new Error("Worker stream exceeded limit.");
-            }
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split("\n");
-            buffer = lines.pop() ?? "";
-
-            for (const line of lines) {
-              if (!line) continue;
-              const event = copilotStreamEventSchema.parse(JSON.parse(line));
-              if (event.requestId !== worker.requestId) {
-                throw new Error("Mismatched worker request.");
-              }
-
-              if (event.type === "heartbeat") {
-                send({ v: 1, type: "heartbeat" });
-              } else if (event.type === "delta") {
-                if (event.sequence !== expectedSequence) {
-                  throw new Error("Out-of-order worker stream.");
-                }
-                expectedSequence += 1;
-                content += event.text;
-                send({
-                  v: 1,
-                  type: "delta",
-                  assistantMessageId: turn.assistant_message_id,
-                  sequence: event.sequence,
-                  text: event.text,
-                });
-              } else if (event.type === "done") {
-                if (terminalPersisted)
-                  throw new Error("Duplicate terminal event.");
-                content = event.text;
-                const usage = event.usage as Json | undefined;
-                await finalizeAssistantMessage(
-                  client,
-                  user.id,
-                  turn.assistant_message_id,
-                  "complete",
-                  content,
-                  { ...(usage ? { usage } : {}) }
-                );
-                terminalPersisted = true;
-                send({
-                  v: 1,
-                  type: "done",
-                  assistantMessageId: turn.assistant_message_id,
-                  content,
-                  ...(event.usage ? { usage: event.usage } : {}),
-                });
-              } else if (event.type === "error") {
-                if (terminalPersisted)
-                  throw new Error("Duplicate terminal event.");
-                const cancelled = event.code === "cancelled";
-                await finalizeAssistantMessage(
-                  client,
-                  user.id,
-                  turn.assistant_message_id,
-                  cancelled ? "cancelled" : "failed",
-                  content,
-                  {
-                    errorCode: mapWorkerError(event.code),
-                  }
-                );
-                terminalPersisted = true;
-                send({
-                  v: 1,
-                  type: "error",
-                  assistantMessageId: turn.assistant_message_id,
-                  code: mapWorkerError(event.code),
-                  message: cancelled
-                    ? "Resposta cancelada."
-                    : "Não foi possível concluir a resposta.",
-                });
-              }
-            }
-          }
-
-          if (!terminalPersisted) {
-            throw new Error("Worker stream ended without terminal event.");
-          }
-        } catch {
-          if (!terminalPersisted) {
-            const cancelled = streamAbort.signal.aborted;
-            const finalized = await finalizeAssistantMessage(
-              client,
-              user.id,
-              turn.assistant_message_id,
-              cancelled ? "cancelled" : "failed",
-              content,
-              {
-                errorCode: cancelled ? "cancelled" : "stream_interrupted",
-              }
-            )
-              .then(() => true)
-              .catch(() => false);
-            terminalPersisted = finalized;
-            if (finalized) {
-              send({
-                v: 1,
-                type: "error",
-                assistantMessageId: turn.assistant_message_id,
-                code: cancelled ? "cancelled" : "stream_interrupted",
-                message: cancelled
-                  ? "Resposta cancelada."
-                  : "A ligação à resposta foi interrompida.",
-              });
-            }
-          }
+          await relayCopilotWorkerStream({
+            stream: worker.response.body!,
+            workerRequestId: worker.requestId,
+            assistantMessageId: turn.assistant_message_id,
+            signal: streamAbort.signal,
+            send,
+            persistDone: async (content, usage) => {
+              await finalizeAssistantMessage(
+                client,
+                user.id,
+                turn.assistant_message_id,
+                "complete",
+                content,
+                { usage }
+              );
+            },
+            persistError: async ({ status, content, errorCode }) => {
+              await finalizeAssistantMessage(
+                client,
+                user.id,
+                turn.assistant_message_id,
+                status,
+                content,
+                { errorCode }
+              );
+            },
+            parseWorkerFrame: (frame) =>
+              copilotStreamEventSchema.parse(JSON.parse(frame)),
+            maxResponseBytes: COPILOT_WORKER_MAX_RESPONSE_BYTES,
+          });
         } finally {
           detachRequestAbort?.();
           release();
@@ -311,10 +219,4 @@ export async function POST(request: Request) {
     }
     return jsonError("Não foi possível iniciar a resposta.", 502);
   }
-}
-
-function mapWorkerError(
-  code: "cancelled" | "timeout" | "unavailable" | "invalid_response"
-) {
-  return code === "unavailable" ? "provider_unavailable" : code;
 }

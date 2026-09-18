@@ -547,6 +547,27 @@ export const inferenceUsageSchema = z
   })
   .strict();
 
+export const safeWebSourceSchema = z
+  .object({
+    url: z
+      .string()
+      .url()
+      .max(2_048)
+      .refine((value) => {
+        const url = new URL(value);
+        return (
+          url.protocol === "https:" &&
+          !url.username &&
+          !url.password &&
+          !url.search &&
+          !url.hash &&
+          (!url.port || url.port === "443")
+        );
+      }),
+    title: z.string().min(1).max(200).optional(),
+  })
+  .strict();
+
 const successfulInferenceSchema = z
   .object({
     ok: z.literal(true),
@@ -599,6 +620,24 @@ export const copilotStreamEventSchema = z.discriminatedUnion("type", [
       requestId: z.string().uuid(),
       sequence: z.number().int().positive().max(1_000_000),
       text: z.string().min(1).max(COPILOT_STREAM_MAX_DELTA_LENGTH),
+    })
+    .strict(),
+  z
+    .object({
+      v: z.literal(COPILOT_STREAM_PROTOCOL_VERSION),
+      type: z.literal("tool"),
+      requestId: z.string().uuid(),
+      tool: z.literal("web_fetch"),
+      status: z.enum(["started", "completed"]),
+      source: safeWebSourceSchema.optional(),
+    })
+    .strict(),
+  z
+    .object({
+      v: z.literal(COPILOT_STREAM_PROTOCOL_VERSION),
+      type: z.literal("sources"),
+      requestId: z.string().uuid(),
+      sources: z.array(safeWebSourceSchema).min(1).max(16),
     })
     .strict(),
   z

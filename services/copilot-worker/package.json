@@ -11,6 +11,7 @@
     "start": "node dist/index.js",
     "test": "npm run build && node --test tests/*.test.mjs",
     "test:real": "npm run build && node scripts/real-smoke.mjs",
+    "test:web-real": "npm run build && node scripts/web-fetch-smoke.mjs",
     "type-check": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
